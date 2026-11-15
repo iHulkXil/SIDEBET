@@ -73,5 +73,5 @@ export function encodeBase58(bytes: Uint8Array): string {
 }
 
 // Official SIDEBET Treasury Vault addresses for on-chain deposits
-export const SOLANA_TREASURY_PUBKEY = '6WBC6z2j35UeH1E5fWb2J9qE9Dfv9Y1sWq8rD5hG7tK'; // Sidebet multi-sig / treasury
+export const SOLANA_TREASURY_PUBKEY = '7MYUSRzd7hJEmW1zDVafw4BNuYFt84tKAz5evM8i8fs3'; // Sidebet treasury
 export const EVM_TREASURY_ADDRESS = '0x88B3b0fF297E524b07D024fFE21B7C9592f7e77D'; // Sidebet EVM treasury
