@@ -138,16 +138,58 @@ export function detectAirtelNumber(rawPhone: string): boolean {
   return false;
 }
 
+const KYC_CACHE_PREFIX = 'sidebet_kyc_record_v1:';
+
+function readCachedKyc(userId?: string): KycRecord | null {
+  if (!userId) return null;
+  try {
+    const raw = localStorage.getItem(`${KYC_CACHE_PREFIX}${userId}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as KycRecord;
+    return parsed && typeof parsed === 'object' && parsed.kycCompleted ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedKyc(userId: string | undefined, rec: KycRecord | null) {
+  if (!userId || !rec) return;
+  try {
+    if (rec.kycCompleted) {
+      localStorage.setItem(`${KYC_CACHE_PREFIX}${userId}`, JSON.stringify(rec));
+    }
+  } catch {
+    // ignore storage quota errors
+  }
+}
+
 export function KycProvider({ children }: { children: ReactNode }) {
   const { ready, authenticated, user, getAccessToken } = usePrivy();
   const { toast } = useToast();
   const [record, setRecord] = useState<KycRecord | null>(null);
   const [loading, setLoading] = useState(false);
+  const [resolvedUserId, setResolvedUserId] = useState<string | null>(null);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
+
+  const getTokenWithRetry = useCallback(async (): Promise<string | null> => {
+    const delays = [0, 200, 400, 700, 1100];
+    for (const delay of delays) {
+      if (delay > 0) {
+        await new Promise((r) => setTimeout(r, delay));
+      }
+      try {
+        const token = await getAccessToken();
+        if (token) return token;
+      } catch {
+        // continue retrying while Privy finishes session hydration
+      }
+    }
+    return null;
+  }, [getAccessToken]);
 
   const authFetch = useCallback(
     async <T,>(path: string, init?: RequestInit): Promise<T> => {
-      const token = await getAccessToken();
+      const token = await getTokenWithRetry();
       if (!token) {
         throw new Error('Authentication token unavailable. Please sign in again.');
       }
@@ -166,27 +208,64 @@ export function KycProvider({ children }: { children: ReactNode }) {
       }
       return body as T;
     },
-    [getAccessToken],
+    [getTokenWithRetry],
   );
 
   const refreshKyc = useCallback(async () => {
     if (!ready || !authenticated || !user?.id) {
       setRecord(null);
+      setResolvedUserId(null);
       setLoading(false);
       setOnboardingOpen(false);
       return;
     }
 
+    const currentUserId = user.id;
+    const cached = readCachedKyc(currentUserId);
+    if (cached) {
+      setRecord(cached);
+      setOnboardingOpen(false);
+    }
+
     setLoading(true);
     try {
       const data = await authFetch<KycRecord>('/kyc');
-      setRecord(data);
-      if (!data.kycCompleted) {
+      if (data.kycCompleted) {
+        setRecord(data);
+        writeCachedKyc(currentUserId, data);
+        setOnboardingOpen(false);
+      } else if (cached?.kycCompleted && cached.fullName && cached.dob && cached.country && cached.address) {
+        // Backend store was empty (e.g. after server restart) while user already completed Level 1 KYC on this device;
+        // silently re-sync their profile to the server instead of prompting again.
+        try {
+          const synced = await authFetch<KycRecord>('/kyc/submit', {
+            method: 'POST',
+            body: JSON.stringify({
+              fullName: cached.fullName,
+              dob: cached.dob,
+              country: cached.country,
+              address: cached.address,
+            }),
+          });
+          setRecord(synced);
+          writeCachedKyc(currentUserId, synced);
+          setOnboardingOpen(false);
+        } catch {
+          setRecord(cached);
+          setOnboardingOpen(false);
+        }
+      } else {
+        setRecord(data);
         setOnboardingOpen(true);
       }
     } catch (err) {
       console.warn('Failed to fetch KYC status:', err);
+      if (cached) {
+        setRecord(cached);
+        setOnboardingOpen(false);
+      }
     } finally {
+      setResolvedUserId(currentUserId);
       setLoading(false);
     }
   }, [ready, authenticated, user?.id, authFetch]);
@@ -202,6 +281,8 @@ export function KycProvider({ children }: { children: ReactNode }) {
         body: JSON.stringify(input),
       });
       setRecord(updated);
+      writeCachedKyc(user?.id, updated);
+      setOnboardingOpen(false);
       localStorage.setItem('sidebet_terms_accepted', 'true');
       pushNotification({
         id: `kyc-verified-${updated.privyUserId}`,
@@ -223,6 +304,7 @@ export function KycProvider({ children }: { children: ReactNode }) {
         body: JSON.stringify(input),
       });
       setRecord(updated);
+      writeCachedKyc(user?.id, updated);
       pushNotification({
         id: `kyc-level2-${updated.privyUserId}`,
         title: 'Level 2 KYC Verified',
@@ -253,6 +335,7 @@ export function KycProvider({ children }: { children: ReactNode }) {
         body: JSON.stringify({ code }),
       });
       setRecord(updated);
+      writeCachedKyc(user?.id, updated);
 
       if (updated.carrier === 'airtel') {
         if (updated.airtelBonusStatus === 'unlocked') {
@@ -292,6 +375,7 @@ export function KycProvider({ children }: { children: ReactNode }) {
           },
         );
         setRecord(res.record);
+        writeCachedKyc(user?.id, res.record);
         if (res.justUnlocked) {
           pushNotification({
             id: `airtel-200mb-unlocked-${res.record.privyUserId}`,
@@ -318,6 +402,7 @@ export function KycProvider({ children }: { children: ReactNode }) {
       method: 'POST',
     });
     setRecord(updated);
+    writeCachedKyc(user?.id, updated);
     pushNotification({
       id: `airtel-200mb-claimed-${updated.privyUserId}`,
       title: '200MB Airtel Data Claimed',
@@ -331,12 +416,16 @@ export function KycProvider({ children }: { children: ReactNode }) {
 
   const isKycComplete = Boolean(record?.kycCompleted);
   const isLevel2Complete = Boolean(record?.kycLevel2Completed || record?.idNumberMasked);
-  const needsKyc = Boolean(ready && authenticated && !loading && !isKycComplete);
+  const awaitingInitialResolve = Boolean(
+    ready && authenticated && user?.id && resolvedUserId !== user.id && !isKycComplete,
+  );
+  const effectiveLoading = loading || awaitingInitialResolve;
+  const needsKyc = Boolean(ready && authenticated && !effectiveLoading && !isKycComplete);
 
   const value = useMemo<KycContextValue>(
     () => ({
       record,
-      loading,
+      loading: effectiveLoading,
       isKycComplete,
       isLevel2Complete,
       needsKyc,
@@ -352,7 +441,7 @@ export function KycProvider({ children }: { children: ReactNode }) {
     }),
     [
       record,
-      loading,
+      effectiveLoading,
       isKycComplete,
       isLevel2Complete,
       needsKyc,

@@ -38,6 +38,7 @@ export type Position = {
 };
 
 // Seed Initial Markets across Politics, Nigerian Politics, Crypto, Sports, Finance, and Lifestyle
+// Volume, liquidity, and share skew strictly start at 0 / 50-50 and reflect ONLY real bets played on this site.
 const INITIAL_MARKETS: Market[] = [
   // Nigerian Politics
   {
@@ -45,10 +46,10 @@ const INITIAL_MARKETS: Market[] = [
     title: "Will Peter Obi lead a unified opposition coalition ticket ahead of Nigeria's 2027 election?",
     description: "Resolves YES if Peter Obi is formally announced as the joint presidential flagbearer of a registered multi-party coalition before Q4 2026.",
     category: "Nigerian Politics",
-    yesShares: 5800,
-    noShares: 4200,
-    liquidity: 65,
-    volume: 194500,
+    yesShares: 5000,
+    noShares: 5000,
+    liquidity: 0,
+    volume: 0,
     endsAt: "Dec 2026",
     status: "open",
     resolution: null,
@@ -62,10 +63,10 @@ const INITIAL_MARKETS: Market[] = [
     title: "Will APC retain a >60% seat majority in Nigeria's National Assembly through 2026?",
     description: "Resolves YES if official National Assembly clerk seat counts show APC controlling more than 60% of combined Senate and House seats at year-end.",
     category: "Nigerian Politics",
-    yesShares: 6400,
-    noShares: 3600,
-    liquidity: 48,
-    volume: 128000,
+    yesShares: 5000,
+    noShares: 5000,
+    liquidity: 0,
+    volume: 0,
     endsAt: "Dec 31",
     status: "open",
     resolution: null,
@@ -80,10 +81,10 @@ const INITIAL_MARKETS: Market[] = [
     title: "Will the incumbent coalition hold a majority in the upcoming parliamentary vote?",
     description: "Resolves YES if official electoral commission certifications confirm a majority seat hold following the final ballot count.",
     category: "Politics",
-    yesShares: 4600,
-    noShares: 5400,
-    liquidity: 65,
-    volume: 184500,
+    yesShares: 5000,
+    noShares: 5000,
+    liquidity: 0,
+    volume: 0,
     endsAt: "Nov 2026",
     status: "open",
     resolution: null,
@@ -97,10 +98,10 @@ const INITIAL_MARKETS: Market[] = [
     title: "Will G7 leaders ratify a binding frontier AI safety framework before Q4 close?",
     description: "Resolves YES if an official joint G7 ministerial communiqué ratifies binding compute and safety reporting standards before year-end.",
     category: "Politics",
-    yesShares: 3800,
-    noShares: 6200,
-    liquidity: 42,
-    volume: 96400,
+    yesShares: 5000,
+    noShares: 5000,
+    liquidity: 0,
+    volume: 0,
     endsAt: "Q4",
     status: "open",
     resolution: null,
@@ -115,10 +116,10 @@ const INITIAL_MARKETS: Market[] = [
     title: "BTC price above $92,000 at end of the 4-hour settlement candle?",
     description: "Resolves YES if the Binance / Coinbase 4-hour close price for BTC/USDT prints at or above $92,000.00.",
     category: "Crypto",
-    yesShares: 6200,
-    noShares: 3800,
-    liquidity: 20,
-    volume: 45200,
+    yesShares: 5000,
+    noShares: 5000,
+    liquidity: 0,
+    volume: 0,
     endsAt: "4h",
     status: "open",
     resolution: null,
@@ -132,10 +133,10 @@ const INITIAL_MARKETS: Market[] = [
     title: "SOL price breaks $160 before Friday close?",
     description: "Resolves YES if Pyth Network / Raydium oracle records SOL/USD reaching $160.00 before 23:59 UTC Friday.",
     category: "Crypto",
-    yesShares: 5400,
-    noShares: 4600,
-    liquidity: 15,
-    volume: 32100,
+    yesShares: 5000,
+    noShares: 5000,
+    liquidity: 0,
+    volume: 0,
     endsAt: "48h",
     status: "open",
     resolution: null,
@@ -149,10 +150,10 @@ const INITIAL_MARKETS: Market[] = [
     title: "Will spot ETH ETFs log over $500M in net weekly inflows?",
     description: "Resolves YES if aggregate spot ETH ETF net flows exceed $500,000,000 for the current trading week.",
     category: "Crypto",
-    yesShares: 5900,
-    noShares: 4100,
-    liquidity: 38,
-    volume: 118500,
+    yesShares: 5000,
+    noShares: 5000,
+    liquidity: 0,
+    volume: 0,
     endsAt: "Fri",
     status: "open",
     resolution: null,
@@ -167,10 +168,10 @@ const INITIAL_MARKETS: Market[] = [
     title: "Will Arsenal win the Premier League 2026/27 title race?",
     description: "Resolves YES if Arsenal Football Club is officially crowned Premier League Champions by the FA.",
     category: "Sports",
-    yesShares: 7200,
-    noShares: 2800,
-    liquidity: 80,
-    volume: 890000,
+    yesShares: 5000,
+    noShares: 5000,
+    liquidity: 0,
+    volume: 0,
     endsAt: "May 2027",
     status: "open",
     resolution: null,
@@ -185,10 +186,10 @@ const INITIAL_MARKETS: Market[] = [
     title: "Will the Federal Reserve cut interest rates by 25bps+ at the next FOMC meeting?",
     description: "Resolves YES if the FOMC official statement announces a target federal funds rate reduction of at least 25 basis points.",
     category: "Finance",
-    yesShares: 5800,
-    noShares: 4200,
-    liquidity: 55,
-    volume: 214000,
+    yesShares: 5000,
+    noShares: 5000,
+    liquidity: 0,
+    volume: 0,
     endsAt: "Q4",
     status: "open",
     resolution: null,
@@ -202,10 +203,10 @@ const INITIAL_MARKETS: Market[] = [
     title: "Will the Central Bank of Nigeria (CBN) cut the MPR below 25% at its next MPC?",
     description: "Resolves YES if the official CBN Monetary Policy Committee communiqué sets the Monetary Policy Rate below 25.00%.",
     category: "Finance",
-    yesShares: 4400,
-    noShares: 5600,
-    liquidity: 40,
-    volume: 112000,
+    yesShares: 5000,
+    noShares: 5000,
+    liquidity: 0,
+    volume: 0,
     endsAt: "MPC",
     status: "open",
     resolution: null,
@@ -220,10 +221,10 @@ const INITIAL_MARKETS: Market[] = [
     title: "Will Davido & Burna Boy announce a joint global stadium performance this year?",
     description: "Resolves YES if both artists or their official management announce a co-headlined stadium show or tour date.",
     category: "Lifestyle",
-    yesShares: 3900,
-    noShares: 6100,
-    liquidity: 34,
-    volume: 164000,
+    yesShares: 5000,
+    noShares: 5000,
+    liquidity: 0,
+    volume: 0,
     endsAt: "Dec 31",
     status: "open",
     resolution: null,
@@ -237,10 +238,10 @@ const INITIAL_MARKETS: Market[] = [
     title: "Will the top celebrity power couple split rumor be officially confirmed this month?",
     description: "Resolves YES if either party publishes an official statement or verified social confirmation ending the relationship.",
     category: "Lifestyle",
-    yesShares: 6300,
-    noShares: 3700,
-    liquidity: 28,
-    volume: 98500,
+    yesShares: 5000,
+    noShares: 5000,
+    liquidity: 0,
+    volume: 0,
     endsAt: "30d",
     status: "open",
     resolution: null,
@@ -254,10 +255,10 @@ const INITIAL_MARKETS: Market[] = [
     title: "Will an Afrobeats headline album cross 1B Spotify streams within 60 days of release?",
     description: "Resolves YES if official Spotify chart trackers confirm 1,000,000,000+ cumulative streams within 60 calendar days.",
     category: "Lifestyle",
-    yesShares: 5500,
-    noShares: 4500,
-    liquidity: 31,
-    volume: 137200,
+    yesShares: 5000,
+    noShares: 5000,
+    liquidity: 0,
+    volume: 0,
     endsAt: "60d",
     status: "open",
     resolution: null,
@@ -276,6 +277,59 @@ const POSITIONS_FILE = path.join(DATA_DIR, "sidebet_positions.json");
 // In-Memory caches backed by JSON files
 let marketsMap = new Map<string, Market>();
 let positionsList: Position[] = [];
+
+const INITIAL_MARKET_IDS = new Set(INITIAL_MARKETS.map((m) => m.id));
+
+// Recompute market volume, liquidity, and AMM shares strictly from real bets placed on this site
+function reconcileMarketsFromPositions(): boolean {
+  let changed = false;
+
+  const statsByMarket = new Map<
+    string,
+    { volume: number; yesStake: number; noStake: number }
+  >();
+
+  for (const pos of positionsList) {
+    const stake = Number(pos.amount) || 0;
+    if (stake <= 0) continue;
+    const entry = statsByMarket.get(pos.marketId) ?? {
+      volume: 0,
+      yesStake: 0,
+      noStake: 0,
+    };
+    entry.volume += stake;
+    if (pos.side === "YES") entry.yesStake += stake;
+    else entry.noStake += stake;
+    statsByMarket.set(pos.marketId, entry);
+  }
+
+  marketsMap.forEach((market, id) => {
+    const real = statsByMarket.get(id) ?? { volume: 0, yesStake: 0, noStake: 0 };
+    const nextVolume = Number(real.volume.toFixed(6));
+    const nextYes = 5000 + real.yesStake * 1000;
+    const nextNo = 5000 + real.noStake * 1000;
+    const nextLiquidity = INITIAL_MARKET_IDS.has(id)
+      ? Number((real.volume * 0.5).toFixed(6))
+      : market.volume === nextVolume
+      ? market.liquidity
+      : Number((real.volume * 0.5).toFixed(6));
+
+    if (
+      market.volume !== nextVolume ||
+      market.liquidity !== nextLiquidity ||
+      market.yesShares !== nextYes ||
+      market.noShares !== nextNo
+    ) {
+      market.volume = nextVolume;
+      market.liquidity = nextLiquidity;
+      market.yesShares = nextYes;
+      market.noShares = nextNo;
+      changed = true;
+    }
+  });
+
+  return changed;
+}
 
 // Load state from file or seed (and ensure new seed categories are backfilled)
 function initStore() {
@@ -299,15 +353,19 @@ function initStore() {
       }
     });
 
-    if (modified) {
-      persistMarkets();
-    }
-
     if (fs.existsSync(POSITIONS_FILE)) {
       const data = JSON.parse(fs.readFileSync(POSITIONS_FILE, "utf-8"));
       if (Array.isArray(data)) {
         positionsList = data;
       }
+    }
+
+    if (reconcileMarketsFromPositions()) {
+      modified = true;
+    }
+
+    if (modified) {
+      persistMarkets();
     }
   } catch (err) {
     console.error("Error initializing market store:", err);
@@ -598,10 +656,19 @@ router.post("/positions/:id/claim", (req: Request, res: Response) => {
 // 8. GET /api/stats/overview
 router.get("/stats/overview", (_req: Request, res: Response) => {
   const allMarkets = Array.from(marketsMap.values());
-  const totalVolume = allMarkets.reduce((acc, m) => acc + (m.volume || 0), 0);
-  const totalLiquidity = allMarkets.reduce((acc, m) => acc + (m.liquidity || 0), 0);
+  const totalVolume = Number(
+    allMarkets.reduce((acc, m) => acc + (m.volume || 0), 0).toFixed(6),
+  );
+  const totalLiquidity = Number(
+    allMarkets.reduce((acc, m) => acc + (m.liquidity || 0), 0).toFixed(6),
+  );
   const openCount = allMarkets.filter((m) => m.status === "open").length;
   const resolvedCount = allMarkets.filter((m) => m.status === "resolved").length;
+  const uniqueTraders = new Set(
+    positionsList
+      .map((p) => p.walletAddress || p.userId)
+      .filter((id): id is string => Boolean(id && id.trim())),
+  );
 
   return res.json({
     success: true,
@@ -612,7 +679,7 @@ router.get("/stats/overview", (_req: Request, res: Response) => {
       totalVolume,
       totalLiquidity,
       totalPositions: positionsList.length,
-      activeTradersCount: 1248,
+      activeTradersCount: uniqueTraders.size,
     },
   });
 });

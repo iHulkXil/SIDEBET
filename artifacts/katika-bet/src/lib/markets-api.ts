@@ -62,6 +62,11 @@ export async function fetchMarkets(category?: string, search?: string): Promise<
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data.markets)) {
+        try {
+          if (!category || category === 'All') {
+            localStorage.setItem('sidebet_cached_markets', JSON.stringify(data.markets));
+          }
+        } catch {}
         return data.markets;
       }
     }
@@ -159,6 +164,7 @@ export async function placeStake(input: {
   side: 'YES' | 'NO';
   amount: number;
   odds: number;
+  userId?: string;
   walletAddress?: string;
   txSig?: string;
 }): Promise<{ position: Position; market: Market }> {
@@ -212,12 +218,12 @@ export async function fetchStats(): Promise<PlatformStats> {
   }
 
   return {
-    totalMarkets: 8,
-    openMarkets: 8,
+    totalMarkets: 0,
+    openMarkets: 0,
     resolvedMarkets: 0,
-    totalVolume: 1660200,
-    totalLiquidity: 340,
+    totalVolume: 0,
+    totalLiquidity: 0,
     totalPositions: 0,
-    activeTradersCount: 1248,
+    activeTradersCount: 0,
   };
 }

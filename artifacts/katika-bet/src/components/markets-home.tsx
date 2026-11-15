@@ -11,7 +11,6 @@ import {
   ExternalLink,
   ShieldAlert,
   Loader2,
-  Info,
   Clock,
   Coins,
   SlidersHorizontal,
@@ -48,13 +47,11 @@ export const MARKET_CATEGORIES = [
   'Lifestyle',
 ] as const;
 
-const TOP_MOVERS = [
-  { name: 'Bitcoin ($91.4K)', pct: 67, change: '+5.4%', icon: 'btc', color: '#facc15' },
-  { name: 'Arsenal FC', pct: 72, change: '+3.1%', icon: 'arsenal', color: '#ec4899' },
-  { name: 'Peter Obi Coalition', pct: 58, change: '+6.2%', icon: 'politics', color: '#22c55e' },
-  { name: 'Davido & Burna Tour', pct: 39, change: '+8.4%', icon: 'lifestyle', color: '#ec4899' },
-  { name: 'Solana ($148.5)', pct: 74, change: '+7.3%', icon: 'sol', color: '#4ade80' },
-];
+function formatSol(val: number): string {
+  const num = Number(val || 0);
+  if (num === 0) return '0';
+  return Number(num.toFixed(2)).toLocaleString();
+}
 
 function MarketIcon({ type }: { type?: string }) {
   if (type === 'btc') return <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-[#facc15]/15 border border-[#facc15]/30 text-[#facc15]"><Bitcoin size={20} /></div>;
@@ -215,6 +212,7 @@ export function MarketsHome({
         side,
         amount,
         odds: decimalOdds,
+        userId: user?.id,
         walletAddress: walletAddr,
         txSig,
       });
@@ -325,26 +323,29 @@ export function MarketsHome({
     return category === 'All' ? markets : markets.filter((m) => m.category === category);
   }, [markets, category]);
 
+  const activeSiteMovers = useMemo(() => {
+    return [...markets]
+      .filter((m) => (m.volume || 0) > 0)
+      .sort((a, b) => (b.volume || 0) - (a.volume || 0))
+      .slice(0, 5)
+      .map((m) => {
+        const { yesPct } = calcOdds(m.yesShares, m.noShares);
+        return {
+          id: m.id,
+          name: m.title,
+          pct: yesPct,
+          volume: m.volume,
+          icon: m.icon,
+          market: m,
+        };
+      });
+  }, [markets]);
+
   const isDiscover = variant === 'discover';
 
   return (
-    <div className={`space-y-6 p-4 lg:p-8 mx-auto ${isDiscover ? 'max-w-[1600px]' : 'max-w-7xl'}`}>
-      {/* Compliance / Disclaimer Banner */}
-      <div className="rounded-2xl border border-white/[0.08] bg-[#0E1318]/90 backdrop-blur-md px-4 py-3 text-xs text-slate-400 flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-md">
-        <div className="flex items-center gap-2">
-          <Info size={15} className="text-[#4ADE80] shrink-0" />
-          <span>
-            <strong>18+ Trade Responsibly</strong>. Community-curated prediction events. Content provided for decentralized forecast and informational purposes.
-          </span>
-        </div>
-        <div className="flex items-center gap-3 font-mono text-[11px] text-slate-500">
-          <span>Multi-Chain Vaults Live</span>
-          <span>·</span>
-          <span>Multi-Sig Protected</span>
-        </div>
-      </div>
-
-      {/* Hero Banner (Compact header on Discover so Markets grid dominates above the fold) */}
+    <div className={`space-y-4 px-4 pt-2 pb-6 lg:px-8 lg:pt-4 lg:pb-8 mx-auto ${isDiscover ? 'max-w-[1600px]' : 'max-w-7xl'}`}>
+      {/* Hero Banner (Positioned directly at the top of the main page) */}
       {isDiscover ? (
         <div className="flex flex-col gap-4 rounded-3xl border border-white/[0.08] bg-[#0E1318]/92 backdrop-blur-md p-5 lg:px-7 lg:py-5 shadow-xl sm:flex-row sm:items-center sm:justify-between">
           <div className="space-y-1">
@@ -417,16 +418,16 @@ export function MarketsHome({
         </div>
       )}
 
-      {/* Main Grid: Markets + Side Rail (PvP on Discover, Top Movers on Markets) */}
+      {/* Main Grid: Markets + Side Rail (On mobile Discover, PvP renders above Markets; on xl desktop, PvP stays on right rail) */}
       <div
         className={
           isDiscover
-            ? 'grid gap-6 grid-cols-1 xl:grid-cols-[minmax(0,1fr)_370px] items-start'
+            ? 'grid gap-5 grid-cols-1 xl:grid-cols-[minmax(0,1fr)_370px] items-start'
             : 'grid gap-6 lg:grid-cols-4 items-start'
         }
       >
         {/* Markets Cards */}
-        <div className={`${isDiscover ? 'min-w-0' : 'lg:col-span-3'} space-y-4`}>
+        <div className={`${isDiscover ? 'min-w-0 order-2 xl:order-1' : 'lg:col-span-3'} space-y-4`}>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <Flame size={18} className="text-[#f472b6]" />
@@ -477,9 +478,9 @@ export function MarketsHome({
                           <span className="rounded-full bg-[#facc15]/20 border border-[#facc15]/40 px-2 py-0.5 text-[9px] font-mono font-bold text-[#facc15]">
                             RESOLVED: {m.resolution}
                           </span>
-                        ) : m.volume > 100000 ? (
+                        ) : m.volume >= 5 ? (
                           <span className="rounded-full bg-[#ec4899]/15 border border-[#ec4899]/30 px-2 py-0.5 text-[9px] font-mono text-[#f472b6]">
-                            🔥 HOT
+                            🔥 ACTIVE
                           </span>
                         ) : null}
                       </div>
@@ -494,7 +495,7 @@ export function MarketsHome({
                     {/* Probability Bar */}
                     <div className="flex items-center justify-between text-xs font-mono mb-1.5">
                       <span className="font-bold text-[#4ade80]">{yesPct}% Yes</span>
-                      <span className="text-slate-400 font-mono">Vol: {m.volume.toLocaleString()} SOL</span>
+                      <span className="text-slate-400 font-mono">Vol: {formatSol(m.volume)} SOL</span>
                     </div>
                     <div className="h-1.5 w-full overflow-hidden rounded-full bg-[#080C0F]">
                       <div
@@ -535,24 +536,29 @@ export function MarketsHome({
               );
             })}
           </div>
-          {/* Compact Top Movers Strip below Market Grid on Discover */}
+          {/* Live Site Activity Strip below Market Grid on Discover */}
           {isDiscover && (
             <div className="rounded-3xl border border-white/[0.08] bg-[#0E1318]/92 backdrop-blur-sm p-5 shadow-lg">
               <div className="flex items-center justify-between gap-2 mb-3">
                 <div className="flex items-center gap-2">
                   <TrendingUp size={16} className="text-[#4ade80]" />
-                  <h3 className="text-sm font-bold text-white">Top Consensus Movers</h3>
+                  <h3 className="text-sm font-bold text-white">Active Site Markets</h3>
                 </div>
-                <span className="text-[11px] font-mono text-slate-400">24h Momentum</span>
+                <span className="text-[11px] font-mono text-slate-400">Live Site Bets Only</span>
               </div>
 
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-                {TOP_MOVERS.map((m) => {
-                  const isPositive = m.change.startsWith('+');
-                  return (
-                    <div
-                      key={m.name}
-                      className="flex items-center justify-between gap-2 rounded-2xl border border-white/[0.06] bg-[#080C0F]/80 p-3 hover:border-white/15 transition-colors"
+              {activeSiteMovers.length === 0 ? (
+                <p className="rounded-2xl border border-white/[0.06] bg-[#080C0F]/80 px-4 py-3 text-xs text-slate-400">
+                  No market bets placed on this site yet. Stake YES or NO on any market above to start live site volume.
+                </p>
+              ) : (
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+                  {activeSiteMovers.map((m) => (
+                    <button
+                      type="button"
+                      key={m.id}
+                      onClick={() => handleOpenDetail(m.market)}
+                      className="flex items-center justify-between gap-2 rounded-2xl border border-white/[0.06] bg-[#080C0F]/80 p-3 text-left hover:border-white/15 transition-colors"
                     >
                       <div className="min-w-0">
                         <div className="text-xs font-semibold text-white truncate">{m.name}</div>
@@ -560,60 +566,56 @@ export function MarketsHome({
                           {m.pct}% YES
                         </div>
                       </div>
-                      <span
-                        className={`text-[11px] font-mono font-bold tabular-nums shrink-0 ${
-                          isPositive ? 'text-[#4ade80]' : 'text-[#f472b6]'
-                        }`}
-                      >
-                        {m.change}
+                      <span className="text-[11px] font-mono font-bold tabular-nums shrink-0 text-[#4ade80]">
+                        {formatSol(m.volume)} SOL
                       </span>
-                    </div>
-                  );
-                })}
-              </div>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>
 
-        {/* Right Side Rail: PvP Showcase on Discover, Top Movers on Markets */}
+        {/* Right Side Rail (Top on mobile view): PvP Showcase on Discover, Live Site Volume on Markets */}
         {isDiscover && sideRail ? (
-          sideRail
+          <div className="order-1 xl:order-2">{sideRail}</div>
         ) : (
           <div className="rounded-3xl border border-white/[0.08] bg-[#0E1318]/92 backdrop-blur-sm p-5 shadow-lg">
             <div className="flex items-center gap-2 mb-4">
               <TrendingUp size={16} className="text-[#4ade80]" />
-              <h3 className="text-sm font-bold text-white">Top Movers</h3>
+              <h3 className="text-sm font-bold text-white">Top Site Volume</h3>
             </div>
 
-            <div className="space-y-3">
-              {TOP_MOVERS.map((m) => {
-                const isPositive = m.change.startsWith('+');
-                return (
+            {activeSiteMovers.length === 0 ? (
+              <p className="rounded-2xl border border-white/[0.06] bg-[#080C0F]/80 p-3.5 text-xs text-slate-400 leading-relaxed">
+                No bets placed on this site yet. Market volume updates strictly from real wagers placed here.
+              </p>
+            ) : (
+              <div className="space-y-3">
+                {activeSiteMovers.map((m) => (
                   <div
-                    key={m.name}
-                    className="flex items-center justify-between rounded-2xl p-2.5 hover:bg-[#131A21] transition-colors cursor-pointer"
+                    key={m.id}
+                    onClick={() => handleOpenDetail(m.market)}
+                    className="flex items-center justify-between gap-2 rounded-2xl p-2.5 hover:bg-[#131A21] transition-colors cursor-pointer"
                   >
-                    <div className="flex items-center gap-2.5">
+                    <div className="flex items-center gap-2.5 min-w-0">
                       <MarketIcon type={m.icon} />
-                      <div>
-                        <div className="text-xs font-semibold text-white">{m.name}</div>
+                      <div className="min-w-0">
+                        <div className="text-xs font-semibold text-white truncate">{m.name}</div>
                         <div className="text-[10px] text-slate-400 font-mono">Consensus {m.pct}%</div>
                       </div>
                     </div>
 
-                    <div className="text-right">
-                      <span
-                        className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-mono font-bold ${
-                          isPositive ? 'bg-[#22c55e]/15 text-[#4ade80]' : 'bg-[#ec4899]/15 text-[#f472b6]'
-                        }`}
-                      >
-                        {m.change}
+                    <div className="text-right shrink-0">
+                      <span className="inline-block rounded-full bg-[#22c55e]/15 px-2 py-0.5 text-[10px] font-mono font-bold text-[#4ade80]">
+                        {formatSol(m.volume)} SOL
                       </span>
                     </div>
                   </div>
-                );
-              })}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -669,13 +671,13 @@ export function MarketsHome({
               <div className="rounded-2xl border border-white/5 bg-[#121820] p-3 text-center">
                 <span className="text-[10px] text-slate-400 uppercase font-mono block">Volume</span>
                 <span className="text-xs font-bold font-mono text-white tabular-nums">
-                  {selectedMarket.volume.toLocaleString()} SOL
+                  {formatSol(selectedMarket.volume)} SOL
                 </span>
               </div>
               <div className="rounded-2xl border border-white/5 bg-[#121820] p-3 text-center">
                 <span className="text-[10px] text-slate-400 uppercase font-mono block">Liquidity</span>
                 <span className="text-xs font-bold font-mono text-[#facc15] tabular-nums">
-                  {selectedMarket.liquidity} SOL
+                  {formatSol(selectedMarket.liquidity)} SOL
                 </span>
               </div>
             </div>

@@ -59,10 +59,9 @@ export function extractAccessToken(req: Request): string | null {
   return null;
 }
 
-export async function authenticateRequest(
-  req: Request,
+export async function verifyAccessToken(
+  token: string,
 ): Promise<VerifiedPrivyIdentity> {
-  const token = extractAccessToken(req);
   if (!token) {
     throw new AuthError("Missing Privy access token");
   }
@@ -120,4 +119,14 @@ export async function authenticateRequest(
     }
     throw new AuthError("Invalid Privy access token");
   }
+}
+
+export async function authenticateRequest(
+  req: Request,
+): Promise<VerifiedPrivyIdentity> {
+  const token = extractAccessToken(req);
+  if (!token) {
+    throw new AuthError("Missing Privy access token");
+  }
+  return verifyAccessToken(token);
 }

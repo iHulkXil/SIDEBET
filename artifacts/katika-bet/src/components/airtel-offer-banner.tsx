@@ -50,7 +50,7 @@ export function AirtelOfferBanner() {
   const status = record.airtelBonusStatus;
 
   return (
-    <div className="mx-auto max-w-[1440px] px-4 lg:px-8 pt-4">
+    <div className="mx-auto max-w-[1440px] px-4 lg:px-8 pt-2">
       <div className="relative flex flex-col gap-3 rounded-2xl border border-rose-500/35 bg-gradient-to-r from-[#260B14] via-[#15121D] to-[#0B1912] px-4 py-3.5 shadow-[0_8px_30px_rgba(244,63,94,0.12)] sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-start sm:items-center gap-3 pr-7 sm:pr-0">
           <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-rose-500/20 border border-rose-500/40 text-rose-300">

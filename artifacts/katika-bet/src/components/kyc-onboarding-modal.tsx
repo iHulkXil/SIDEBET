@@ -29,6 +29,7 @@ export function KycOnboardingModal() {
   const { authenticated, user, logout } = usePrivy();
   const {
     loading,
+    isKycComplete,
     needsKyc,
     onboardingOpen,
     setOnboardingOpen,
@@ -50,14 +51,16 @@ export function KycOnboardingModal() {
     }
   }, [user?.google?.name, fullName]);
 
-  // Keep modal strictly locked until Level 1 signup KYC is completed
+  // Keep modal strictly locked until Level 1 signup KYC is completed, and close immediately once completed
   useEffect(() => {
-    if (needsKyc) {
+    if (isKycComplete) {
+      setOnboardingOpen(false);
+    } else if (needsKyc) {
       setOnboardingOpen(true);
     }
-  }, [needsKyc, setOnboardingOpen]);
+  }, [isKycComplete, needsKyc, setOnboardingOpen]);
 
-  if (!authenticated || loading) return null;
+  if (!authenticated || loading || isKycComplete) return null;
   if (!needsKyc && !onboardingOpen) return null;
 
   const computeAge = (val: string) => {

@@ -393,14 +393,14 @@ export function PvpSideRail() {
   return (
     <aside className="space-y-4">
       {/* Side Rail Header */}
-      <div className="rounded-3xl border border-white/[0.08] bg-[#0E1318]/95 p-5 shadow-xl space-y-4">
-        <div className="flex items-start justify-between gap-3 border-b border-white/[0.06] pb-3.5">
+      <div className="rounded-3xl border border-white/[0.08] bg-[#0E1318]/95 p-4 xl:p-5 shadow-xl space-y-3.5 xl:space-y-4">
+        <div className="flex items-start justify-between gap-3 border-b border-white/[0.06] pb-3">
           <div>
             <div className="flex items-center gap-1.5 text-[11px] font-mono text-[#F472B6]">
               <Swords size={13} />
               <span>PvP Arena · Multi-Chain</span>
             </div>
-            <h2 className="mt-1 text-lg font-extrabold font-display text-white">
+            <h2 className="mt-0.5 xl:mt-1 text-base xl:text-lg font-extrabold font-display text-white">
               Rich PvP Games
             </h2>
           </div>
@@ -415,19 +415,19 @@ export function PvpSideRail() {
           </Link>
         </div>
 
-        <p className="text-xs text-slate-400 leading-relaxed">
+        <p className="hidden xl:block text-xs text-slate-400 leading-relaxed">
           Tap <strong className="text-white">Peek Live</strong> on any card for a stylized toon gameplay preview before staking SOL, ETH, BTC, or USDT.
         </p>
 
-        {/* Active Rich Game Cards with Stylized Toon Art + Live Short-Peek Visualizer */}
-        <div className="space-y-4">
+        {/* Active Rich Game Cards: horizontal snap-scroll on mobile/tablet so PvP sits right near the top without pushing Markets down; stacked right rail on xl */}
+        <div className="flex gap-3 overflow-x-auto snap-x snap-mandatory pb-1 -mx-1 px-1 xl:mx-0 xl:px-0 xl:pb-0 xl:block xl:space-y-4 xl:overflow-visible">
           {PVP_GAMES.map((game) => {
             const isPeeking = peekingGameId === game.id;
 
             return (
               <div
                 key={game.id}
-                className="overflow-hidden rounded-2xl border border-white/[0.08] bg-[#080C0F]/90 transition-colors hover:border-white/20"
+                className="w-[78vw] max-w-[290px] shrink-0 snap-start xl:w-full xl:max-w-none overflow-hidden rounded-2xl border border-white/[0.08] bg-[#080C0F]/90 transition-colors hover:border-white/20"
               >
                 {/* 16:9 Media Stage: Stylized Toon Art OR Live Animated Toon Peek */}
                 <div className="relative aspect-video w-full overflow-hidden bg-[#0D1318]">
@@ -518,8 +518,8 @@ export function PvpSideRail() {
           })}
         </div>
 
-        {/* Promising More Games Section */}
-        <div className="rounded-2xl border border-white/[0.08] bg-[#080C0F]/90 p-4 space-y-3">
+        {/* Promising More Games Section (Desktop rail; kept compact on mobile so Markets appear right below PvP cards) */}
+        <div className="hidden xl:block rounded-2xl border border-white/[0.08] bg-[#080C0F]/90 p-4 space-y-3">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-1.5">
               <Sparkles size={14} className="text-[#FACC15]" />

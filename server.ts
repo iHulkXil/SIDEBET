@@ -1,9 +1,10 @@
 import express from "express";
+import http from "http";
 import path from "path";
 import fs from "fs";
-import { fileURLToPath } from "url";
 import { createServer as createViteServer } from "vite";
 import apiApp from "./artifacts/api-server/src/app";
+import { attachChatWebSocket } from "./artifacts/api-server/src/routes/chat";
 
 const currentDir =
   typeof __dirname !== "undefined"
@@ -50,7 +51,10 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
+  const httpServer = http.createServer(app);
+  attachChatWebSocket(httpServer);
+
+  httpServer.listen(PORT, "0.0.0.0", () => {
     console.log(`Katika.Bet server running on http://0.0.0.0:${PORT}`);
   });
 }
