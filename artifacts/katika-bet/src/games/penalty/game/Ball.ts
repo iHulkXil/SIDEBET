@@ -7,6 +7,7 @@ import type { AssetManager } from '../assets/AssetManager';
 import type { BallTheme } from '../types';
 import {
   calculateBallTrajectory,
+  calculateBallVelocityToTarget,
   clampBallInsideNet,
   updateBallPhysics,
   type GoalBounds,
@@ -80,6 +81,16 @@ export class Ball {
       z: this.mesh.position.z,
     };
     this.velocity = calculateBallTrajectory(direction, power, difficulty);
+  }
+
+  kickToTarget(target: Vec2, power: number): void {
+    this.isMoving = true;
+    this.previousPosition = {
+      x: this.mesh.position.x,
+      y: this.mesh.position.y,
+      z: this.mesh.position.z,
+    };
+    this.velocity = calculateBallVelocityToTarget(target, power, this.initialPosition);
   }
 
   update(deltaTime: number, goalBounds?: GoalBounds, alreadyScored = false): boolean {

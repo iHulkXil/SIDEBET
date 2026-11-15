@@ -129,6 +129,13 @@ export interface AssetManifest {
   audioUrls: Partial<Record<SoundEffectKey, string>>;
 }
 
+export interface GoalRegion {
+  x: number; // Normalized horizontal center (-1 = left post, +1 = right post)
+  y: number; // Normalized vertical center (-1 = turf bottom, +1 = crossbar)
+  rx: number; // Normalized half-width (fraction of goal half-width)
+  ry: number; // Normalized half-height (fraction of goal half-height)
+}
+
 export interface ShotRecord {
   round: number;
   teamIndex: 0 | 1;
@@ -136,6 +143,8 @@ export interface ShotRecord {
   outcome: ShotOutcome;
   isSuddenDeath: boolean;
   shotSpeedKmh: number;
+  overlapPct?: number;
+  saveProbPct?: number;
 }
 
 export interface ShootoutMatchConfig {
@@ -175,6 +184,12 @@ export interface MatchStateSnapshot {
   power: number; // 0..1
   isPowerActive: boolean;
   aimDirection: { x: number; y: number };
+  shotArea: GoalRegion;
+  saveArea: GoalRegion;
+  revealShotArea: boolean;
+  revealSaveArea: boolean;
+  lastOverlapRatio: number | null; // 0..1
+  lastSaveProbability: number | null; // 0..1
   countdownSeconds: number | null;
   lastOutcome: ShotOutcome | null;
   statusMessage: string;

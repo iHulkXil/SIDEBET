@@ -4,7 +4,7 @@
  */
 import * as THREE from 'three';
 import type { AssetManager, CharacterRigInstance } from '../assets/AssetManager';
-import type { CharacterProfile, TeamConfig } from '../types';
+import type { CharacterProfile, GoalRegion, TeamConfig } from '../types';
 import { getGoalkeeperDiveDirection, type Vec2, type Vec3 } from '../utils/Physics';
 
 export class Goalkeeper {
@@ -74,6 +74,31 @@ export class Goalkeeper {
     this.isPlayerControlled = isPlayerControlled;
   }
 
+  diveToGoalRegion(saveArea: GoalRegion, goalWidth = 7.32, goalHeight = 2.44): void {
+    if (this.isDiving) return;
+    this.isDiving = true;
+    this.diveProgress = 0;
+
+    this.diveDirection = { x: saveArea.x, y: saveArea.y };
+
+    const targetWorldX = THREE.MathUtils.clamp(saveArea.x * (goalWidth / 2), -3.25, 3.25);
+    const targetWorldY = THREE.MathUtils.clamp(((saveArea.y + 1) / 2) * goalHeight - 0.65, 0, 0.95);
+
+    this.targetPosition = {
+      x: targetWorldX,
+      y: targetWorldY,
+      z: this.initialPosition.z + 0.15,
+    };
+
+    if (Math.abs(saveArea.x) < 0.22) {
+      this.rig?.play('diveCenter', { loop: false, timeScale: 1.35, fade: 0.06 });
+    } else if (saveArea.x < 0) {
+      this.rig?.play('diveLeft', { loop: false, timeScale: 1.35, fade: 0.06 });
+    } else {
+      this.rig?.play('diveRight', { loop: false, timeScale: 1.35, fade: 0.06 });
+    }
+  }
+
   dive(directionOrVelocity: Vec2 | Vec3, useAiPrediction = false): void {
     if (this.isDiving) return;
     this.isDiving = true;
@@ -121,12 +146,8 @@ export class Goalkeeper {
     }
   }
 
-  trackBall(ballPosition: THREE.Vector3, deltaTime: number): void {
-    if (!this.isDiving && !this.isPlayerControlled) {
-      const rate = Math.min(2.8, 0.6 + (this.difficulty / 100) * 2.2);
-      const targetX = THREE.MathUtils.clamp(ballPosition.x * 0.22, -2.0, 2.0);
-      this.group.position.x += (targetX - this.group.position.x) * Math.min(1, deltaTime * rate);
-    }
+  trackBall(_ballPosition: THREE.Vector3, _deltaTime: number): void {
+    // Keeper stays positioned in stance until diveToGoalRegion fires
   }
 
   update(deltaTime: number): void {

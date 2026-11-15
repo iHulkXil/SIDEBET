@@ -134,40 +134,29 @@ export class Player {
     const dt = Math.min(deltaTime, 0.05);
     this.rig?.update(dt);
 
-    // Update aim arrow & goal reticle while aiming
+    // Update aim arrow while aiming (Level renders the 3D goal shot-zone box)
     if (!this.isRunningUp && this.showAimHelpers && this.controls.role === 'shoot') {
-      const dir: Vec2 = this.controls.direction;
+      const dir: Vec2 = { x: this.controls.shotArea.x, y: this.controls.shotArea.y };
       this.arrowGroup.visible = true;
-      this.goalReticle.visible = true;
+      this.goalReticle.visible = false;
 
       // Rotate arrow in XZ & pitch slightly with Y
-      const yaw = -Math.atan2(dir.x, 1);
-      const pitch = THREE.MathUtils.clamp(dir.y * 0.45, -0.15, 0.55);
+      const yaw = -Math.atan2(dir.x * 0.45, 1);
+      const pitch = THREE.MathUtils.clamp((dir.y + 0.35) * 0.28, -0.05, 0.45);
       this.arrowGroup.rotation.set(pitch, yaw, 0);
-
-      // Move reticle smoothly along goal plane
-      const targetX = THREE.MathUtils.clamp(dir.x * 3.55, -3.55, 3.55);
-      const targetY = THREE.MathUtils.clamp(0.45 + (dir.y + 0.2) * 1.65, 0.25, 2.32);
-      this.reticleTarget.set(targetX, targetY, 0.15);
-      this.goalReticle.position.lerp(this.reticleTarget, Math.min(1, dt * 16));
 
       if (this.controls.isPowerActive) {
         const scale = 0.75 + this.controls.power * 1.45;
         this.arrowGroup.scale.set(scale, scale, scale);
-        // Hue shifts smoothly: 0.33 (green) -> 0.16 (gold) -> 0.0 (red hot)
         const hue = THREE.MathUtils.lerp(0.32, 0.02, this.controls.power);
         this.tempColor.setHSL(hue, 0.95, 0.54);
         this.arrowBodyMat.color.copy(this.tempColor);
         this.arrowHeadMat.color.copy(this.tempColor);
-        this.goalReticleMat.color.copy(this.tempColor);
-        this.goalReticle.scale.setScalar(0.85 + this.controls.power * 0.45);
       } else {
         this.arrowGroup.scale.set(1, 1, 1);
         this.tempColor.set('#FACC15');
         this.arrowBodyMat.color.copy(this.tempColor);
         this.arrowHeadMat.color.copy(this.tempColor);
-        this.goalReticleMat.color.copy(this.tempColor);
-        this.goalReticle.scale.setScalar(1);
       }
     } else if (this.isRunningUp) {
       this.runUpProgress += dt / this.runUpDuration;

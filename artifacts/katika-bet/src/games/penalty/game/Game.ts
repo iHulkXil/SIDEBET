@@ -1,10 +1,12 @@
 /**
  * Cartoon 3D Penalty Shootout Engine Controller
  * Imported & customised from jainalokk/soccer.io src/game/Game.js (MIT License, Copyright (c) 2025 jainalokk)
+ * Customized: Single behind-striker camera, dual Shot/Save goal area selection, and overlap-controlled save probability.
  */
 import * as THREE from 'three';
 import type { AssetManager } from '../assets/AssetManager';
 import type {
+  GoalRegion,
   MatchPhase,
   MatchStateSnapshot,
   ShootoutMatchConfig,
@@ -13,8 +15,16 @@ import type {
   TeamConfig,
   TurnRole,
 } from '../types';
-import { Controls, type ShootPayload } from '../utils/Controls';
-import { checkGoalLineCross, checkSave, type Vec2 } from '../utils/Physics';
+import {
+  Controls,
+  DEFAULT_SAVE_REGION,
+  DEFAULT_SHOT_REGION,
+  type ShootPayload,
+} from '../utils/Controls';
+import {
+  calculateGoalRegionOverlap,
+  checkGoalLineCross,
+} from '../utils/Physics';
 import { Ball } from './Ball';
 import { Goalkeeper } from './Goalkeeper';
 import { Level } from './Level';
@@ -59,6 +69,17 @@ export class Game {
   private levelGoals = 0;
   private arcadeShotsTaken = 0;
 
+  // Dual goal-region selection & overlap probability state
+  private currentShotArea: GoalRegion = { ...DEFAULT_SHOT_REGION };
+  private currentSaveArea: GoalRegion = { ...DEFAULT_SAVE_REGION };
+  private revealShotArea = true;
+  private revealSaveArea = false;
+  private lastOverlapRatio: number | null = null;
+  private lastSaveProbability: number | null = null;
+  private pendingPassPlayShot: { shotArea: GoalRegion; power: number } | null = null;
+  private shotWillBeSaved = false;
+  private shotSaveTriggered = false;
+
   // Per-shot flags
   private shotResolved = false;
   private ballEnteredGoal = false;
@@ -66,18 +87,27 @@ export class Game {
   private ballFlightElapsed = 0;
   private lastShotSpeedKmh = 0;
   private countdownSeconds: number | null = null;
+  private countdownTimerId: number | null = null;
   private lastOutcome: ShotOutcome | null = null;
-  private statusMessage = 'Aim & hold Space or Shoot to strike!';
+  private statusMessage = 'Select your Shot Zone & hold Space or Shoot!';
   private subMessage = 'Best of 5 penalties + Sudden Death';
   private handoffNextPlayerLabel: string | null = null;
   private winnerTeamIndex: 0 | 1 | 'draw' | null = null;
   private winReason: string | null = null;
 
-  // Camera choreography
-  private camTargetPos = new THREE.Vector3(0, 3.1, 18.2);
+  // Single locked behind-striker camera angle
+  private readonly fixedCamPos = new THREE.Vector3(0, 3.05, 18.2);
+  private readonly fixedCamLookAt = new THREE.Vector3(0, 1.15, 0);
+  private camTargetPos = new THREE.Vector3(0, 3.05, 18.2);
   private camLookAtCurrent = new THREE.Vector3(0, 1.15, 0);
   private camLookAtTarget = new THREE.Vector3(0, 1.15, 0);
   private cameraShake = 0;
+
+  // Pre-allocated raycast helpers for clicking/dragging directly on 3D goal
+  private raycaster = new THREE.Raycaster();
+  private rayNdc = new THREE.Vector2();
+  private goalPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+  private rayHitPoint = new THREE.Vector3();
 
   // Particles
   private particles: Particle[] = [];
@@ -113,8 +143,8 @@ export class Game {
     this.controls = new Controls();
     this.controls.setCallbacks({
       onShoot: (payload) => this.handlePlayerShoot(payload),
-      onDive: (dir) => this.handlePlayerDive(dir),
-      onChange: () => this.emitSnapshot(),
+      onSaveConfirm: (saveArea) => this.handleSaveZoneConfirmed(saveArea),
+      onChange: () => this.syncRegionsFromControls(),
     });
 
     this.createScene();
@@ -125,7 +155,6 @@ export class Game {
 
   private container: HTMLElement;
   private assets: AssetManager;
-
   private isSoftwareGl = false;
 
   private detectSoftwareGl(): boolean {
@@ -158,8 +187,8 @@ export class Game {
     const height = Math.max(1, this.container.clientHeight);
 
     this.camera = new THREE.PerspectiveCamera(62, width / height, 0.1, 400);
-    this.camera.position.copy(this.camTargetPos);
-    this.camera.lookAt(this.camLookAtTarget);
+    this.camera.position.copy(this.fixedCamPos);
+    this.camera.lookAt(this.fixedCamLookAt);
 
     this.renderer = new THREE.WebGLRenderer({
       antialias: !this.isSoftwareGl,
@@ -222,17 +251,47 @@ export class Game {
     return this.config.difficulty;
   }
 
-  private scheduleTimer(fn: () => void, ms: number): void {
+  private scheduleTimer(fn: () => void, ms: number): number {
     const id = window.setTimeout(() => {
       this.activeTimers.delete(id);
       if (!this.disposed) fn();
     }, ms);
     this.activeTimers.add(id);
+    return id;
+  }
+
+  private clearCountdownTimer(): void {
+    if (this.countdownTimerId !== null) {
+      window.clearTimeout(this.countdownTimerId);
+      this.activeTimers.delete(this.countdownTimerId);
+      this.countdownTimerId = null;
+    }
   }
 
   private clearAllTimers(): void {
+    this.clearCountdownTimer();
     this.activeTimers.forEach((id) => window.clearTimeout(id));
     this.activeTimers.clear();
+  }
+
+  private syncRegionsFromControls(): void {
+    if (this.phase === 'ready' || this.phase === 'countdown') {
+      if (this.controls.usePrimaryWasd) {
+        this.currentShotArea = { ...this.controls.shotArea };
+        this.currentSaveArea = { ...this.controls.saveArea };
+      } else if (this.activeControlRole === 'shoot') {
+        this.currentShotArea = { ...this.controls.shotArea };
+      } else {
+        this.currentSaveArea = { ...this.controls.saveArea };
+      }
+      this.level?.updateGoalZones(
+        this.currentShotArea,
+        this.currentSaveArea,
+        this.revealShotArea,
+        this.revealSaveArea,
+      );
+    }
+    this.emitSnapshot();
   }
 
   public setSoundEnabled(enabled: boolean): void {
@@ -240,9 +299,41 @@ export class Game {
     this.assets.soundEnabled = enabled;
   }
 
-  public setAimFromNormalized(x: number, y: number): void {
-    if (this.phase !== 'ready' || this.activeControlRole !== 'shoot') return;
-    this.controls.setAimDirection({ x, y });
+  public setActiveZoneFromNormalized(x: number, y: number, targetRole?: TurnRole): void {
+    const role = targetRole ?? this.activeControlRole;
+    if (role === 'shoot') {
+      if (this.phase !== 'ready' || (this.activeControlRole !== 'shoot' && !this.controls.usePrimaryWasd)) {
+        return;
+      }
+      this.controls.setShotAreaCenter(x, y);
+    } else {
+      if (
+        (this.phase !== 'ready' && this.phase !== 'countdown') ||
+        (this.activeControlRole !== 'save' && !this.controls.usePrimaryWasd)
+      ) {
+        return;
+      }
+      this.controls.setSaveAreaCenter(x, y);
+    }
+  }
+
+  public setGoalZoneFromClientPoint(clientX: number, clientY: number, roleOverride?: TurnRole): void {
+    if (!this.renderer || !this.level) return;
+    if (this.phase !== 'ready' && this.phase !== 'countdown') return;
+
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+
+    this.rayNdc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+    this.rayNdc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+
+    this.raycaster.setFromCamera(this.rayNdc, this.camera);
+    const hit = this.raycaster.ray.intersectPlane(this.goalPlane, this.rayHitPoint);
+    if (!hit) return;
+
+    const nx = THREE.MathUtils.clamp(hit.x / (this.level.goalWidth / 2), -1, 1);
+    const ny = THREE.MathUtils.clamp((hit.y / this.level.goalHeight) * 2 - 1, -0.95, 0.95);
+    this.setActiveZoneFromNormalized(nx, ny, roleOverride);
   }
 
   public startTouchPower(): void {
@@ -255,27 +346,53 @@ export class Game {
     this.controls.releaseShot();
   }
 
-  public triggerTouchDive(dir: Vec2): void {
-    if (this.phase !== 'ball-flight' && this.phase !== 'countdown') return;
-    if (this.activeControlRole === 'save' || (this.config.mode === 'local-2p' && this.config.local2pStyle === 'simultaneous')) {
-      this.goalkeeper.dive(dir, false);
-    }
+  public confirmTouchSaveZone(): void {
+    if (this.activeControlRole !== 'save') return;
+    if (this.phase !== 'ready' && this.phase !== 'countdown') return;
+    this.handleSaveZoneConfirmed({ ...this.currentSaveArea });
   }
 
   public confirmHandoff(): void {
     if (this.phase !== 'handoff') return;
     this.handoffNextPlayerLabel = null;
+
+    if (this.pendingPassPlayShot) {
+      // Stage 2 of Local 2P Pass & Play: defending player selects Save Zone without seeing shot!
+      this.phase = 'ready';
+      this.activeControlRole = 'save';
+      this.controls.role = 'save';
+      this.controls.enabled = true;
+      this.revealShotArea = false;
+      this.revealSaveArea = true;
+      this.player.setAimHelpersVisible(false);
+      this.goalkeeper.setPlayerControlled(true);
+
+      const defTeam = this.activeTeamIndex === 0 ? this.awayTeam : this.homeTeam;
+      const defLabel = this.activeTeamIndex === 0 ? 'Player 2' : 'Player 1';
+      this.statusMessage = `${defLabel} (${defTeam.shortName}) · Select Save Zone`;
+      this.subMessage = 'Drag on goal or use Arrows, then Lock Save Zone to face the shot!';
+      this.level.updateGoalZones(this.currentShotArea, this.currentSaveArea, false, true);
+      this.assets.playSound('whistle');
+      this.emitSnapshot();
+      return;
+    }
+
     if (this.activeControlRole === 'save') {
       this.startAiAutoShotCountdown();
     } else {
       this.phase = 'ready';
       this.controls.enabled = true;
       this.controls.resetState();
+      this.currentShotArea = { ...this.controls.shotArea };
+      this.currentSaveArea = { ...this.controls.saveArea };
+      this.revealShotArea = true;
+      this.revealSaveArea = false;
+      this.level.updateGoalZones(this.currentShotArea, this.currentSaveArea, true, false);
       this.statusMessage =
         this.activeTeamIndex === 0
-          ? `${this.homeTeam.shortName} (P1) Stepping Up`
-          : `${this.awayTeam.shortName} (P2) Stepping Up`;
-      this.subMessage = 'Aim & hold Space / Shoot button to strike!';
+          ? `${this.homeTeam.shortName} (P1) · Select Shot Zone`
+          : `${this.awayTeam.shortName} (P2) · Select Shot Zone`;
+      this.subMessage = 'Position Shot Zone & hold Space / Shoot to strike!';
       this.assets.playSound('whistle');
       this.emitSnapshot();
     }
@@ -302,7 +419,10 @@ export class Game {
     this.currentLevel = 1;
     this.levelGoals = 0;
     this.arcadeShotsTaken = 0;
+    this.pendingPassPlayShot = null;
     this.lastOutcome = null;
+    this.lastOverlapRatio = null;
+    this.lastSaveProbability = null;
     this.winnerTeamIndex = null;
     this.winReason = null;
     this.goalkeeper.setDifficulty(this.getAdjustedDifficulty());
@@ -325,18 +445,35 @@ export class Game {
     ]);
   }
 
+  private getKeeperZoneRadii(): { rx: number; ry: number } {
+    const diff = this.getAdjustedDifficulty();
+    return {
+      rx: THREE.MathUtils.lerp(0.28, 0.36, diff / 100),
+      ry: THREE.MathUtils.lerp(0.38, 0.48, diff / 100),
+    };
+  }
+
   private setupTurn(promptHandoff: boolean): void {
+    this.clearCountdownTimer();
     this.ball.reset();
     this.player.reset();
     this.goalkeeper.reset();
     this.shotResolved = false;
+    this.shotWillBeSaved = false;
+    this.shotSaveTriggered = false;
     this.ballEnteredGoal = false;
     this.goalNetImpacted = false;
     this.ballFlightElapsed = 0;
     this.countdownSeconds = null;
-    this.controls.resetState();
+    this.pendingPassPlayShot = null;
+    this.lastOverlapRatio = null;
+    this.lastSaveProbability = null;
 
-    // Determine who controls what on this kick
+    const { rx: saveRx, ry: saveRy } = this.getKeeperZoneRadii();
+    this.controls.resetState(DEFAULT_SHOT_REGION.rx, DEFAULT_SHOT_REGION.ry, saveRx, saveRy);
+    this.currentShotArea = { ...this.controls.shotArea };
+    this.currentSaveArea = { ...this.controls.saveArea };
+
     const mode = this.config.mode;
     if (mode === 'arcade-shoot') {
       this.activeTeamIndex = 0;
@@ -344,32 +481,39 @@ export class Game {
       this.controls.usePrimaryWasd = false;
       this.goalkeeper.setPlayerControlled(false);
       this.player.setAimHelpersVisible(true);
+      this.revealShotArea = true;
+      this.revealSaveArea = false;
     } else if (mode === 'arcade-save') {
       this.activeTeamIndex = 1;
       this.activeControlRole = 'save';
       this.controls.usePrimaryWasd = false;
       this.goalkeeper.setPlayerControlled(true);
       this.player.setAimHelpersVisible(false);
+      this.revealShotArea = false;
+      this.revealSaveArea = true;
     } else if (mode === 'shootout-ai') {
-      // Even turns (Home kicks): human shoots; Odd turns (Away kicks): human saves
       this.activeControlRole = this.activeTeamIndex === 0 ? 'shoot' : 'save';
       this.controls.usePrimaryWasd = false;
       this.goalkeeper.setPlayerControlled(this.activeControlRole === 'save');
       this.player.setAimHelpersVisible(this.activeControlRole === 'shoot');
+      this.revealShotArea = this.activeControlRole === 'shoot';
+      this.revealSaveArea = this.activeControlRole === 'save';
     } else {
-      // Local 2-Player mode
+      // Local 2-Player mode (single behind-striker camera!)
       if (this.config.local2pStyle === 'simultaneous') {
         this.activeControlRole = 'shoot';
         this.controls.usePrimaryWasd = true;
         this.goalkeeper.setPlayerControlled(true);
-        // Hide goal reticle in simultaneous 2P so keeper doesn't see striker's exact spot
-        this.player.setAimHelpersVisible(false);
+        this.player.setAimHelpersVisible(true);
+        this.revealShotArea = true;
+        this.revealSaveArea = true;
       } else {
-        // Pass-and-play: active striker team shoots against AI keeper (or alternates striker turns cleanly)
         this.activeControlRole = 'shoot';
         this.controls.usePrimaryWasd = false;
-        this.goalkeeper.setPlayerControlled(false);
+        this.goalkeeper.setPlayerControlled(true);
         this.player.setAimHelpersVisible(true);
+        this.revealShotArea = true;
+        this.revealSaveArea = false;
       }
     }
 
@@ -386,7 +530,10 @@ export class Game {
       const pLabel = this.activeTeamIndex === 0 ? 'Player 1' : 'Player 2';
       this.phase = 'handoff';
       this.controls.enabled = false;
-      this.handoffNextPlayerLabel = `${pLabel} · ${nextTeam.name}`;
+      this.revealShotArea = false;
+      this.revealSaveArea = false;
+      this.level.updateGoalZones(this.currentShotArea, this.currentSaveArea, false, false);
+      this.handoffNextPlayerLabel = `${pLabel} · ${nextTeam.name} (Striker)`;
       this.statusMessage = `Pass Controls to ${pLabel}`;
       this.subMessage = `${nextTeam.name} penalty kick — Round ${this.round}`;
       this.emitSnapshot();
@@ -394,6 +541,12 @@ export class Game {
     }
 
     this.handoffNextPlayerLabel = null;
+    this.level.updateGoalZones(
+      this.currentShotArea,
+      this.currentSaveArea,
+      this.revealShotArea,
+      this.revealSaveArea,
+    );
 
     if (this.activeControlRole === 'save') {
       this.startAiAutoShotCountdown();
@@ -404,11 +557,11 @@ export class Game {
       if (this.config.mode === 'local-2p' && this.config.local2pStyle === 'simultaneous') {
         this.statusMessage = `${kickerTeam.shortName} vs ${
           this.activeTeamIndex === 0 ? this.awayTeam.shortName : this.homeTeam.shortName
-        } · Simultaneous Duel`;
-        this.subMessage = 'Striker: WASD + Space · Keeper: Arrow Keys';
+        } · Simultaneous Zone Duel`;
+        this.subMessage = 'Striker (Gold): WASD + Space · Keeper (Cyan): Arrow Keys';
       } else {
-        this.statusMessage = `${kickerTeam.name} Penalty Kick`;
-        this.subMessage = 'Aim with Arrows/WASD or Touch · Hold Space/Shoot for power';
+        this.statusMessage = `${kickerTeam.name} · Select Shot Zone`;
+        this.subMessage = 'Drag on Goal or Pad · Hold Space / Shoot for power';
       }
       this.assets.playSound('whistle');
       this.emitSnapshot();
@@ -416,111 +569,209 @@ export class Game {
   }
 
   private updateCameraForRole(): void {
-    if (this.config.mode === 'local-2p' && this.config.local2pStyle === 'simultaneous') {
-      // Broadcast TV angle so both striker & keeper are crisp and readable
-      this.camTargetPos.set(3.8, 3.6, 17.5);
-      this.camLookAtTarget.set(0, 1.1, 1.5);
-    } else if (this.activeControlRole === 'save') {
-      // Preserved soccer.io behind-goal camera for goalkeeper mode
-      this.camTargetPos.set(0, 2.35, -3.6);
-      this.camLookAtTarget.set(0, 1.05, 11);
-    } else {
-      // Preserved soccer.io behind-striker camera for shoot mode
-      this.camTargetPos.set(0, 3.05, 18.2);
-      this.camLookAtTarget.set(0, 1.15, 0);
-    }
+    // Always maintain ONE camera angle behind the striker
+    this.camTargetPos.copy(this.fixedCamPos);
+    this.camLookAtTarget.copy(this.fixedCamLookAt);
   }
 
   private startAiAutoShotCountdown(): void {
+    this.clearCountdownTimer();
     this.phase = 'countdown';
-    this.controls.enabled = true; // Allow early dive positioning or reaction
-    this.countdownSeconds = 3;
-    this.statusMessage = 'Get Ready to Save!';
-    this.subMessage = 'Use Arrow Keys / WASD or Touch Dive buttons';
+    this.controls.enabled = true;
+    this.revealShotArea = false;
+    this.revealSaveArea = true;
+    this.level.updateGoalZones(this.currentShotArea, this.currentSaveArea, false, true);
+    this.countdownSeconds = 4;
+    this.statusMessage = 'Select Your Save Zone!';
+    this.subMessage = 'Drag on Goal or Pad (or Press Space to Lock Save Now)';
     this.assets.playSound('tick');
     this.emitSnapshot();
 
     const step = (remaining: number) => {
+      if (this.phase !== 'countdown') return;
       if (remaining <= 0) {
         this.countdownSeconds = null;
-        this.triggerAiPenaltyKick();
+        this.triggerAiPenaltyKick({ ...this.currentSaveArea });
         return;
       }
       this.countdownSeconds = remaining;
-      this.statusMessage = `Incoming Shot in ${remaining}...`;
+      this.statusMessage = `Select Save Zone · Shot in ${remaining}...`;
       this.assets.playSound('tick');
       this.emitSnapshot();
-      this.scheduleTimer(() => step(remaining - 1), 900);
+      this.countdownTimerId = this.scheduleTimer(() => step(remaining - 1), 1000);
     };
 
-    this.scheduleTimer(() => step(2), 900);
+    this.countdownTimerId = this.scheduleTimer(() => step(3), 1000);
   }
 
-  private triggerAiPenaltyKick(): void {
-    const diff = this.getAdjustedDifficulty();
-    const randomDir: Vec2 = {
-      x: (Math.random() * 2 - 1) * 0.82,
-      y: Math.random() * 0.72 - 0.05,
-    };
+  private chooseAiShotArea(diff: number): { shotArea: GoalRegion; power: number } {
+    // Higher difficulty aims sharper toward corners
+    const cornerBias = THREE.MathUtils.lerp(0.45, 0.85, diff / 100);
+    const x = (Math.random() * 2 - 1) * cornerBias;
+    const y = THREE.MathUtils.clamp((Math.random() * 2 - 1) * 0.72, -0.75, 0.78);
     const power = THREE.MathUtils.clamp(0.58 + (diff / 100) * 0.34, 0.55, 0.96);
+    return {
+      shotArea: {
+        x,
+        y,
+        rx: DEFAULT_SHOT_REGION.rx,
+        ry: DEFAULT_SHOT_REGION.ry,
+      },
+      power,
+    };
+  }
 
-    this.phase = 'running-up';
-    this.statusMessage = 'Striker Running Up — Dive to Save!';
-    this.emitSnapshot();
+  private chooseAiSaveArea(shotArea: GoalRegion, diff: number): GoalRegion {
+    const { rx, ry } = this.getKeeperZoneRadii();
+    // Higher difficulty = higher likelihood of reading near striker's selected shot zone
+    const readAccuracy = THREE.MathUtils.lerp(0.28, 0.86, diff / 100);
 
-    this.player.startRunUp(() => {
-      this.launchBall(randomDir, power, false);
-    });
+    if (Math.random() < readAccuracy) {
+      const jitterScale = (1 - readAccuracy) * 0.75;
+      return {
+        x: THREE.MathUtils.clamp(shotArea.x + (Math.random() * 2 - 1) * jitterScale, -0.82, 0.82),
+        y: THREE.MathUtils.clamp(shotArea.y + (Math.random() * 2 - 1) * jitterScale * 0.8, -0.7, 0.75),
+        rx,
+        ry,
+      };
+    }
+
+    // Keeper guesses a different corner/section
+    const oppositeX = shotArea.x >= 0 ? -(0.3 + Math.random() * 0.5) : 0.3 + Math.random() * 0.5;
+    const guessY = (Math.random() * 2 - 1) * 0.68;
+    return {
+      x: THREE.MathUtils.clamp(oppositeX, -0.82, 0.82),
+      y: THREE.MathUtils.clamp(guessY, -0.7, 0.75),
+      rx,
+      ry,
+    };
+  }
+
+  private triggerAiPenaltyKick(lockedSaveArea: GoalRegion): void {
+    this.clearCountdownTimer();
+    this.countdownSeconds = null;
+    this.controls.enabled = false;
+    const diff = this.getAdjustedDifficulty();
+    const { shotArea, power } = this.chooseAiShotArea(diff);
+
+    this.executePenaltyKick(shotArea, lockedSaveArea, power);
+  }
+
+  private handleSaveZoneConfirmed(saveArea: GoalRegion): void {
+    if (this.activeControlRole !== 'save') return;
+    this.currentSaveArea = { ...saveArea };
+
+    if (this.phase === 'countdown') {
+      // Human locked their Save Zone early against AI striker
+      this.triggerAiPenaltyKick(this.currentSaveArea);
+    } else if (this.phase === 'ready' && this.pendingPassPlayShot) {
+      // Local 2P Pass & Play Stage 2 complete: P2 locked Save Zone -> execute shot!
+      const shot = this.pendingPassPlayShot;
+      this.pendingPassPlayShot = null;
+      this.controls.enabled = false;
+      this.executePenaltyKick(shot.shotArea, this.currentSaveArea, shot.power);
+    }
   }
 
   private handlePlayerShoot(payload: ShootPayload): void {
     if (this.phase !== 'ready') return;
-    this.phase = 'running-up';
-    if (!this.controls.usePrimaryWasd) {
+
+    this.currentShotArea = { ...payload.shotArea };
+
+    // Local 2P Pass & Play: lock Striker's shot secretly, then hand off to Defender for Save Zone pick
+    if (this.config.mode === 'local-2p' && this.config.local2pStyle === 'pass-and-play') {
+      this.pendingPassPlayShot = {
+        shotArea: { ...payload.shotArea },
+        power: payload.power,
+      };
+      this.phase = 'handoff';
       this.controls.enabled = false;
+      this.revealShotArea = false;
+      this.revealSaveArea = false;
+      this.level.updateGoalZones(this.currentShotArea, this.currentSaveArea, false, false);
+
+      const defTeam = this.activeTeamIndex === 0 ? this.awayTeam : this.homeTeam;
+      const defLabel = this.activeTeamIndex === 0 ? 'Player 2' : 'Player 1';
+      this.handoffNextPlayerLabel = `${defLabel} · ${defTeam.name} (Keeper)`;
+      this.statusMessage = `Shot Locked! Pass Controls to ${defLabel}`;
+      this.subMessage = `${defLabel}: Pick your Save Zone on the goal without peeking!`;
+      this.emitSnapshot();
+      return;
     }
-    this.statusMessage = 'Striking...';
+
+    this.controls.enabled = false;
+
+    const diff = this.getAdjustedDifficulty();
+    const chosenSaveArea =
+      this.config.mode === 'local-2p' && this.config.local2pStyle === 'simultaneous'
+        ? { ...this.controls.saveArea }
+        : this.chooseAiSaveArea(this.currentShotArea, diff);
+
+    this.executePenaltyKick(this.currentShotArea, chosenSaveArea, payload.power);
+  }
+
+  private executePenaltyKick(shotArea: GoalRegion, saveArea: GoalRegion, power: number): void {
+    this.currentShotArea = { ...shotArea };
+    this.currentSaveArea = { ...saveArea };
+    this.revealShotArea = true;
+    this.revealSaveArea = true;
+    this.level.updateGoalZones(this.currentShotArea, this.currentSaveArea, true, true);
+
+    const { overlapRatio, saveProbability } = calculateGoalRegionOverlap(
+      this.currentShotArea,
+      this.currentSaveArea,
+    );
+    this.lastOverlapRatio = overlapRatio;
+    this.lastSaveProbability = saveProbability;
+
+    this.phase = 'running-up';
+    this.statusMessage = 'Striker Running Up!';
+    this.subMessage = `Zone Overlap: ${Math.round(overlapRatio * 100)}% · Save Chance: ${Math.round(saveProbability * 100)}%`;
     this.emitSnapshot();
 
     this.player.startRunUp(() => {
-      const keeperShouldAiDive =
-        !this.goalkeeper.isPlayerControlled && !this.goalkeeper.isCurrentlyDiving();
-      this.launchBall(payload.direction, payload.power, keeperShouldAiDive);
+      this.launchBall(this.currentShotArea, this.currentSaveArea, power, saveProbability);
     });
   }
 
-  private handlePlayerDive(dir: Vec2): void {
-    if (
-      this.phase !== 'countdown' &&
-      this.phase !== 'running-up' &&
-      this.phase !== 'ball-flight'
-    ) {
-      return;
-    }
-    if (!this.goalkeeper.isPlayerControlled && !this.controls.usePrimaryWasd) return;
-    this.goalkeeper.dive(dir, false);
-  }
-
-  private launchBall(direction: Vec2, power: number, aiDive: boolean): void {
+  private launchBall(
+    shotArea: GoalRegion,
+    saveArea: GoalRegion,
+    power: number,
+    saveProbability: number,
+  ): void {
     this.phase = 'ball-flight';
     this.ballFlightElapsed = 0;
     this.shotResolved = false;
+    this.shotSaveTriggered = false;
     this.ballEnteredGoal = false;
 
-    const diff = this.getAdjustedDifficulty();
-    this.ball.kick(direction, power, diff);
+    // Sample landing point inside the selected Shot Zone
+    const normX = shotArea.x + (Math.random() * 2 - 1) * shotArea.rx * 0.42;
+    const normY = shotArea.y + (Math.random() * 2 - 1) * shotArea.ry * 0.42;
+
+    const worldX = normX * (this.level.goalWidth / 2);
+    const worldY = Math.max(0.24, ((normY + 1) / 2) * this.level.goalHeight);
+
+    const halfW = this.level.goalWidth / 2;
+    const isOnTarget =
+      Math.abs(worldX) < halfW - 0.18 &&
+      worldY >= 0.12 &&
+      worldY < this.level.goalHeight - 0.14;
+
+    // Save probability strictly controlled by shotArea/saveArea overlap on on-target shots
+    this.shotWillBeSaved = isOnTarget && Math.random() < saveProbability;
+
+    this.ball.kickToTarget({ x: worldX, y: worldY }, power);
     this.lastShotSpeedKmh = this.ball.getSpeedKmh();
     this.assets.playSound('kick');
 
-    if (aiDive) {
-      // Slight human-like reaction delay (90ms - 220ms depending on difficulty)
-      const reactionMs = THREE.MathUtils.lerp(220, 85, diff / 100);
-      this.scheduleTimer(() => {
-        if (this.phase === 'ball-flight' && !this.shotResolved) {
-          this.goalkeeper.dive(this.ball.velocity, true);
-        }
-      }, reactionMs);
-    }
+    // Keeper dives cleanly to the center of their selected Save Zone
+    this.scheduleTimer(() => {
+      if (this.phase === 'ball-flight' && !this.shotResolved) {
+        this.goalkeeper.diveToGoalRegion(saveArea, this.level.goalWidth, this.level.goalHeight);
+      }
+    }, 55);
 
     this.emitSnapshot();
   }
@@ -552,6 +803,9 @@ export class Game {
     this.lastOutcome = outcome;
     this.phase = 'shot-result';
     this.controls.enabled = false;
+    this.revealShotArea = true;
+    this.revealSaveArea = true;
+    this.level.updateGoalZones(this.currentShotArea, this.currentSaveArea, true, true);
 
     const isGoal = outcome === 'goal';
     this.player.playOutcomeReaction(isGoal);
@@ -579,6 +833,11 @@ export class Game {
       this.assets.playSound('miss');
     }
 
+    const overlapPct =
+      this.lastOverlapRatio !== null ? Math.round(this.lastOverlapRatio * 100) : 0;
+    const saveProbPct =
+      this.lastSaveProbability !== null ? Math.round(this.lastSaveProbability * 100) : 0;
+
     // Record kick & update scores
     const kickingTeam = this.activeTeamIndex === 0 ? this.homeTeam : this.awayTeam;
     if (this.config.mode === 'arcade-shoot' || this.config.mode === 'arcade-save') {
@@ -600,6 +859,8 @@ export class Game {
         outcome,
         isSuddenDeath: false,
         shotSpeedKmh: this.lastShotSpeedKmh,
+        overlapPct,
+        saveProbPct,
       });
 
       this.statusMessage =
@@ -612,10 +873,10 @@ export class Game {
             ? 'WHAT A SAVE!'
             : 'SAVED BY KEEPER!'
           : 'OFF TARGET!';
-      this.subMessage = `${this.lastShotSpeedKmh} km/h · Level ${this.currentLevel}`;
+      this.subMessage = `${this.lastShotSpeedKmh} km/h · Overlap ${overlapPct}% (${saveProbPct}% save chance) · Lv ${this.currentLevel}`;
       this.emitSnapshot();
 
-      this.scheduleTimer(() => this.advanceArcadeState(), 1900);
+      this.scheduleTimer(() => this.advanceArcadeState(), 2100);
       return;
     }
 
@@ -632,6 +893,8 @@ export class Game {
       outcome,
       isSuddenDeath: this.round > 5,
       shotSpeedKmh: this.lastShotSpeedKmh,
+      overlapPct,
+      saveProbPct,
     });
 
     this.statusMessage =
@@ -640,10 +903,10 @@ export class Game {
         : outcome === 'saved'
         ? 'SAVED!'
         : 'MISSED!';
-    this.subMessage = `${this.homeTeam.shortName} ${this.scores[0]} - ${this.scores[1]} ${this.awayTeam.shortName} · ${this.lastShotSpeedKmh} km/h`;
+    this.subMessage = `${this.homeTeam.shortName} ${this.scores[0]} - ${this.scores[1]} ${this.awayTeam.shortName} · Overlap ${overlapPct}% (${saveProbPct}% save prob)`;
     this.emitSnapshot();
 
-    this.scheduleTimer(() => this.advanceShootoutState(), 1950);
+    this.scheduleTimer(() => this.advanceShootoutState(), 2100);
   }
 
   private advanceArcadeState(): void {
@@ -750,7 +1013,6 @@ export class Game {
 
     if (this.phase === 'ball-flight') {
       this.ballFlightElapsed += dt;
-      this.goalkeeper.trackBall(this.ball.getPosition(), dt);
 
       const hitNet = this.ball.update(dt, this.level.getGoalBounds(), this.ballEnteredGoal);
       if (hitNet && !this.goalNetImpacted) {
@@ -761,19 +1023,12 @@ export class Game {
       if (!this.shotResolved) {
         const ballPos = this.ball.getPosition();
 
-        // 1. Check save BEFORE goal crossing if keeper touches ball around line
-        const isSaved = checkSave(
-          ballPos,
-          this.goalkeeper.getPosition(),
-          this.goalkeeper.isCurrentlyDiving(),
-          this.getAdjustedDifficulty(),
-        );
-
-        if (isSaved) {
-          // Deflect ball outward away from goal!
-          this.ball.velocity.z = Math.abs(this.ball.velocity.z) * 0.45 + 3.5;
-          this.ball.velocity.x += (ballPos.x >= this.goalkeeper.getPosition().x ? 1 : -1) * 4.5;
-          this.ball.velocity.y = Math.max(2.2, Math.abs(this.ball.velocity.y) * 0.5);
+        // 1. Overlap-determined save right as ball approaches goal line
+        if (this.shotWillBeSaved && !this.shotSaveTriggered && ballPos.z <= 0.45) {
+          this.shotSaveTriggered = true;
+          this.ball.velocity.z = Math.abs(this.ball.velocity.z) * 0.42 + 4.0;
+          this.ball.velocity.x += (ballPos.x >= this.goalkeeper.getPosition().x ? 1 : -1) * 4.2;
+          this.ball.velocity.y = Math.max(2.0, Math.abs(this.ball.velocity.y) * 0.45);
           this.resolveShot('saved');
           return;
         }
@@ -804,7 +1059,7 @@ export class Game {
           return;
         }
 
-        // 3. Missed shot bounds (past backline outside goal, or stalled, or timeout)
+        // 3. Missed shot bounds
         if (
           ballPos.z < -2.4 ||
           Math.abs(ballPos.x) > 12 ||
@@ -815,7 +1070,6 @@ export class Game {
         }
       }
     } else {
-      // Keep ball settled after goal/save physics settle
       this.ball.update(dt, this.level.getGoalBounds(), this.ballEnteredGoal);
     }
 
@@ -836,7 +1090,7 @@ export class Game {
       }
     }
 
-    // Smooth camera lerp + subtle shake on impact
+    // Smooth camera lerp on the single behind-striker perspective + subtle shake on impact
     const lerpAlpha = Math.min(1, dt * 6.5);
     this.camera.position.lerp(this.camTargetPos, lerpAlpha);
     this.camLookAtCurrent.lerp(this.camLookAtTarget, lerpAlpha);
@@ -868,7 +1122,13 @@ export class Game {
       arcadeMaxShots: this.arcadeMaxShots,
       power: this.controls.power,
       isPowerActive: this.controls.isPowerActive,
-      aimDirection: { ...this.controls.direction },
+      aimDirection: { x: this.currentShotArea.x, y: this.currentShotArea.y },
+      shotArea: { ...this.currentShotArea },
+      saveArea: { ...this.currentSaveArea },
+      revealShotArea: this.revealShotArea,
+      revealSaveArea: this.revealSaveArea,
+      lastOverlapRatio: this.lastOverlapRatio,
+      lastSaveProbability: this.lastSaveProbability,
       countdownSeconds: this.countdownSeconds,
       lastOutcome: this.lastOutcome,
       statusMessage: this.statusMessage,

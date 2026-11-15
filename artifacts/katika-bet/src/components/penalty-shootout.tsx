@@ -118,8 +118,8 @@ export function PenaltyShootoutPage() {
 
   const stageRef = useRef<HTMLDivElement | null>(null);
   const gameRef = useRef<Game | null>(null);
-  const touchPadRef = useRef<HTMLDivElement | null>(null);
-  const swipeStartRef = useRef<{ x: number; y: number } | null>(null);
+  const shotPadRef = useRef<HTMLDivElement | null>(null);
+  const savePadRef = useRef<HTMLDivElement | null>(null);
   const matchKeyRef = useRef<string>(`penalty-${Date.now()}`);
   const matchSettledRef = useRef<boolean>(false);
 
@@ -397,54 +397,36 @@ export function PenaltyShootoutPage() {
     gameRef.current?.restartMatch();
   };
 
-  // Interactive aim pad pointer helper (for mobile touch & mouse drag aiming)
-  const updateAimFromPointer = (clientX: number, clientY: number) => {
-    const el = touchPadRef.current;
+  // Interactive Goal Zone Pad pointer helper (works identically for Striker shot zone & GK save zone)
+  const updateZoneFromPadPointer = (
+    el: HTMLDivElement | null,
+    clientX: number,
+    clientY: number,
+    targetRole: 'shoot' | 'save',
+  ) => {
     if (!el || !gameRef.current) return;
     const rect = el.getBoundingClientRect();
     const nx = Math.max(-1, Math.min(1, ((clientX - rect.left) / rect.width) * 2 - 1));
-    const ny = Math.max(-0.2, Math.min(1, (1 - (clientY - rect.top) / rect.height) * 1.2 - 0.15));
-    gameRef.current.setAimFromNormalized(nx, ny);
+    const ny = Math.max(-0.92, Math.min(0.92, (1 - (clientY - rect.top) / rect.height) * 2 - 1));
+    gameRef.current.setActiveZoneFromNormalized(nx, ny, targetRole);
   };
 
-  // Canvas swipe gesture for keeper diving / striker quick aim
+  // Direct click/drag on the 3D Goal in the viewport moves the active player's Shot Zone or Save Zone
   const handleStagePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    swipeStartRef.current = { x: e.clientX, y: e.clientY };
-    if (snapshot?.activeControlRole === 'shoot' && snapshot.phase === 'ready') {
-      const rect = e.currentTarget.getBoundingClientRect();
-      const nx = Math.max(-1, Math.min(1, ((e.clientX - rect.left) / rect.width) * 2 - 1));
-      const ny = Math.max(-0.15, Math.min(1, (1 - (e.clientY - rect.top) / rect.height) * 1.15));
-      gameRef.current?.setAimFromNormalized(nx, ny);
+    if (snapshot?.phase === 'ready' || snapshot?.phase === 'countdown') {
+      gameRef.current?.setGoalZoneFromClientPoint(e.clientX, e.clientY);
     }
   };
 
   const handleStagePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.buttons === 0 && e.pointerType === 'mouse') return;
-    if (snapshot?.activeControlRole === 'shoot' && snapshot.phase === 'ready') {
-      const rect = e.currentTarget.getBoundingClientRect();
-      const nx = Math.max(-1, Math.min(1, ((e.clientX - rect.left) / rect.width) * 2 - 1));
-      const ny = Math.max(-0.15, Math.min(1, (1 - (e.clientY - rect.top) / rect.height) * 1.15));
-      gameRef.current?.setAimFromNormalized(nx, ny);
+    if (snapshot?.phase === 'ready' || snapshot?.phase === 'countdown') {
+      gameRef.current?.setGoalZoneFromClientPoint(e.clientX, e.clientY);
     }
   };
 
-  const handleStagePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!swipeStartRef.current) return;
-    const dx = e.clientX - swipeStartRef.current.x;
-    const dy = e.clientY - swipeStartRef.current.y;
-    swipeStartRef.current = null;
-
-    if (
-      (snapshot?.activeControlRole === 'save' ||
-        (mode === 'local-2p' && local2pStyle === 'simultaneous')) &&
-      Math.hypot(dx, dy) > 22
-    ) {
-      const len = Math.hypot(dx, dy);
-      gameRef.current?.triggerTouchDive({
-        x: Math.max(-1, Math.min(1, dx / Math.max(40, len))),
-        y: Math.max(-0.4, Math.min(0.8, -dy / Math.max(40, len))),
-      });
-    }
+  const handleStagePointerUp = () => {
+    // Zone stays placed where user tapped/dragged
   };
 
   // Build 5-slot + Sudden Death dot slots per team
@@ -477,7 +459,7 @@ export function PenaltyShootoutPage() {
               Cartoon 3D Penalty Shootout
             </h1>
             <p className="text-[11px] text-slate-400">
-              5 Penalties &amp; Sudden Death · Local 2-Player · 3D Rigged Striker &amp; Keeper
+              5 Penalties &amp; Sudden Death · Single Behind-Striker Camera · Zone Overlap Save Engine
             </p>
           </div>
         </div>
@@ -557,7 +539,7 @@ export function PenaltyShootoutPage() {
                         : 'bg-[#080C0F] text-slate-300 border border-white/10'
                     }`}
                   >
-                    Pass &amp; Play (Camera Flips)
+                    Pass &amp; Play (Turn Handoff)
                   </button>
                   <button
                     type="button"
@@ -1006,10 +988,10 @@ export function PenaltyShootoutPage() {
 
             <div className="text-[11px] text-slate-400 space-y-1 pt-1">
               <p>
-                <strong className="text-slate-200">Desktop:</strong> Arrows / WASD to aim or dive · Hold Space to charge shot power.
+                <strong className="text-slate-200">Dual Goal Zones:</strong> Both Striker (Gold) and Keeper (Cyan) select a portion of the goal from behind the striker. Save probability scales directly with how much of the shot zone overlaps the save zone.
               </p>
               <p>
-                <strong className="text-slate-200">Mobile:</strong> Drag on goal or aim pad · Hold Shoot button or swipe to dive.
+                <strong className="text-slate-200">Controls:</strong> Click/drag directly on the 3D goal or pad, or use Arrows/WASD · Hold Space to shoot · Space/Enter locks Save Zone.
               </p>
             </div>
           </div>
@@ -1107,7 +1089,7 @@ export function PenaltyShootoutPage() {
                   )}
                 </div>
 
-                {/* Live Callout Strip */}
+                {/* Live Callout Strip + Overlap Telemetry */}
                 <div className="rounded-xl border border-white/10 bg-[#080C0F]/85 px-4 py-1.5 text-center">
                   <span className="block text-xs sm:text-sm font-extrabold text-white">
                     {snapshot.statusMessage}
@@ -1115,16 +1097,27 @@ export function PenaltyShootoutPage() {
                   <span className="block text-[10px] font-mono text-slate-300">
                     {snapshot.subMessage}
                   </span>
+                  {snapshot.lastOverlapRatio !== null && snapshot.lastSaveProbability !== null && (
+                    <div className="mt-1 flex items-center justify-center gap-3 text-[10px] font-mono">
+                      <span className="text-[#FACC15]">
+                        Zone Overlap: {Math.round(snapshot.lastOverlapRatio * 100)}%
+                      </span>
+                      <span className="text-slate-500">·</span>
+                      <span className="text-[#38BDF8]">
+                        Save Prob: {Math.round(snapshot.lastSaveProbability * 100)}%
+                      </span>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
 
             {/* Big Countdown Number for Keeper Mode */}
             {snapshot?.countdownSeconds !== null && snapshot?.countdownSeconds !== undefined && (
-              <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
-                <div className="rounded-3xl bg-[#080C0F]/90 border border-white/20 px-8 py-4 text-center">
-                  <span className="block text-xs font-mono text-[#FACC15]">SHOT INCOMING</span>
-                  <span className="block text-5xl font-black font-mono text-white">
+              <div className="pointer-events-none absolute inset-x-0 top-28 z-10 flex justify-center">
+                <div className="rounded-2xl bg-[#080C0F]/90 border border-[#38BDF8]/40 px-5 py-2 text-center shadow-lg">
+                  <span className="block text-[10px] font-mono text-[#38BDF8]">PICK SAVE ZONE</span>
+                  <span className="block text-3xl font-black font-mono text-white">
                     {snapshot.countdownSeconds}
                   </span>
                 </div>
@@ -1133,7 +1126,7 @@ export function PenaltyShootoutPage() {
 
             {/* Local 2P Pass-and-Play Turn Handoff Overlay */}
             {snapshot?.phase === 'handoff' && (
-              <div className="absolute inset-0 z-20 flex items-center justify-center bg-[#080C0F]/88 p-4">
+              <div className="absolute inset-0 z-20 flex items-center justify-center bg-[#080C0F]/92 p-4">
                 <div className="w-full max-w-sm rounded-3xl border border-white/15 bg-[#0E1318] p-6 text-center space-y-4 shadow-2xl">
                   <Users size={28} className="mx-auto text-[#4ADE80]" />
                   <div>
@@ -1148,7 +1141,9 @@ export function PenaltyShootoutPage() {
                     onClick={() => gameRef.current?.confirmHandoff()}
                     className="w-full rounded-2xl bg-[#22C55E] hover:bg-[#16A34A] py-3 text-sm font-black text-black"
                   >
-                    Ready to Kick
+                    {snapshot.handoffNextPlayerLabel?.includes('Keeper')
+                      ? 'Select Save Zone'
+                      : 'Ready to Kick'}
                   </button>
                 </div>
               </div>
@@ -1226,7 +1221,10 @@ export function PenaltyShootoutPage() {
                         <span className="font-mono text-slate-400">
                           {item.isSuddenDeath ? `SD ${item.round}` : `R${item.round}`} · {item.teamCode}
                         </span>
-                        <span className="font-mono text-slate-400">{item.shotSpeedKmh} km/h</span>
+                        <span className="font-mono text-slate-400">
+                          {item.shotSpeedKmh} km/h
+                          {item.overlapPct !== undefined ? ` · ${item.overlapPct}% overlap` : ''}
+                        </span>
                         <span
                           className={`font-bold uppercase ${
                             item.outcome === 'goal'
@@ -1263,42 +1261,115 @@ export function PenaltyShootoutPage() {
               </div>
             )}
 
-            {/* Bottom Floating Power Bar + Mobile Touch Controls */}
+            {/* Bottom Floating Dual Goal-Zone Selection Pads + Power / Confirm Actions */}
             {snapshot &&
               snapshot.phase !== 'match-over' &&
               snapshot.phase !== 'handoff' &&
               snapshot.phase !== 'level-complete' && (
                 <div className="pointer-events-none absolute inset-x-3 bottom-3 z-10 flex flex-col sm:flex-row items-end justify-between gap-3">
-                  {/* Striker Touch Aim Pad & Shoot Hold Button */}
+                  {/* Striker Shot Zone Pad + Power & Shoot */}
                   {snapshot.activeControlRole === 'shoot' && (
                     <>
-                      <div
-                        ref={touchPadRef}
-                        onPointerDown={(e) => {
-                          e.stopPropagation();
-                          updateAimFromPointer(e.clientX, e.clientY);
-                        }}
-                        onPointerMove={(e) => {
-                          if (e.buttons > 0 || e.pointerType !== 'mouse') {
-                            e.stopPropagation();
-                            updateAimFromPointer(e.clientX, e.clientY);
-                          }
-                        }}
-                        className="pointer-events-auto relative h-24 w-36 rounded-2xl border border-white/20 bg-[#080C0F]/85 touch-none cursor-crosshair overflow-hidden"
-                      >
-                        <span className="absolute top-1 left-2 text-[9px] font-mono text-slate-300">
-                          AIM PAD
-                        </span>
-                        {/* Goal frame indicator inside pad */}
-                        <div className="absolute inset-x-3 top-4 bottom-2 border-t-2 border-x-2 border-white/35 rounded-t-sm" />
+                      <div className="pointer-events-auto flex items-end gap-2">
                         <div
-                          className="absolute h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#FACC15] border-2 border-black shadow"
-                          style={{
-                            left: `${((snapshot.aimDirection.x + 1) / 2) * 100}%`,
-                            top: `${Math.max(12, Math.min(88, (1 - (snapshot.aimDirection.y + 0.2) / 1.2) * 100))}%`,
+                          ref={shotPadRef}
+                          onPointerDown={(e) => {
+                            e.stopPropagation();
+                            updateZoneFromPadPointer(shotPadRef.current, e.clientX, e.clientY, 'shoot');
                           }}
-                        />
+                          onPointerMove={(e) => {
+                            if (e.buttons > 0 || e.pointerType !== 'mouse') {
+                              e.stopPropagation();
+                              updateZoneFromPadPointer(shotPadRef.current, e.clientX, e.clientY, 'shoot');
+                            }
+                          }}
+                          className="relative h-24 w-40 rounded-2xl border border-[#FACC15]/35 bg-[#080C0F]/90 touch-none cursor-crosshair overflow-hidden"
+                        >
+                          <span className="absolute top-1 left-2 text-[9px] font-mono font-bold text-[#FACC15]">
+                            SHOT ZONE
+                          </span>
+                          {/* Scaled Goal Frame */}
+                          <div className="absolute inset-x-3 top-4 bottom-2 border-t-2 border-x-2 border-white/30 rounded-t-sm" />
+                          {/* Striker Selected Shot Box */}
+                          <div
+                            className="absolute border-2 border-[#FACC15] bg-[#FACC15]/30 rounded-sm pointer-events-none"
+                            style={{
+                              left: `${((snapshot.shotArea.x + 1) / 2) * 100}%`,
+                              top: `${((1 - snapshot.shotArea.y) / 2) * 100}%`,
+                              width: `${snapshot.shotArea.rx * 100}%`,
+                              height: `${snapshot.shotArea.ry * 100}%`,
+                              transform: 'translate(-50%, -50%)',
+                            }}
+                          />
+                          {/* Revealed Keeper Save Box after kick */}
+                          {snapshot.revealSaveArea && (
+                            <div
+                              className="absolute border-2 border-[#38BDF8] bg-[#38BDF8]/25 rounded-sm pointer-events-none"
+                              style={{
+                                left: `${((snapshot.saveArea.x + 1) / 2) * 100}%`,
+                                top: `${((1 - snapshot.saveArea.y) / 2) * 100}%`,
+                                width: `${snapshot.saveArea.rx * 100}%`,
+                                height: `${snapshot.saveArea.ry * 100}%`,
+                                transform: 'translate(-50%, -50%)',
+                              }}
+                            />
+                          )}
+                        </div>
+
+                        {/* Quick Shot Presets for touch convenience */}
+                        <div className="hidden md:grid grid-cols-3 gap-1 rounded-xl border border-white/10 bg-[#080C0F]/90 p-1.5">
+                          {[
+                            { label: '↖', x: -0.72, y: 0.55 },
+                            { label: '⬆', x: 0, y: 0.58 },
+                            { label: '↗', x: 0.72, y: 0.55 },
+                            { label: '↙', x: -0.72, y: -0.45 },
+                            { label: '⬇', x: 0, y: -0.45 },
+                            { label: '↘', x: 0.72, y: -0.45 },
+                          ].map((p) => (
+                            <button
+                              key={p.label}
+                              type="button"
+                              onClick={() => gameRef.current?.setActiveZoneFromNormalized(p.x, p.y, 'shoot')}
+                              className="h-7 w-7 rounded-md bg-[#121820] hover:bg-[#FACC15] hover:text-black text-[11px] font-bold text-slate-200 transition-colors"
+                            >
+                              {p.label}
+                            </button>
+                          ))}
+                        </div>
                       </div>
+
+                      {/* Simultaneous 2P Keeper Save Zone Pad */}
+                      {mode === 'local-2p' && local2pStyle === 'simultaneous' && (
+                        <div
+                          ref={savePadRef}
+                          onPointerDown={(e) => {
+                            e.stopPropagation();
+                            updateZoneFromPadPointer(savePadRef.current, e.clientX, e.clientY, 'save');
+                          }}
+                          onPointerMove={(e) => {
+                            if (e.buttons > 0 || e.pointerType !== 'mouse') {
+                              e.stopPropagation();
+                              updateZoneFromPadPointer(savePadRef.current, e.clientX, e.clientY, 'save');
+                            }
+                          }}
+                          className="pointer-events-auto relative h-24 w-40 rounded-2xl border border-[#38BDF8]/40 bg-[#080C0F]/90 touch-none cursor-crosshair overflow-hidden"
+                        >
+                          <span className="absolute top-1 left-2 text-[9px] font-mono font-bold text-[#38BDF8]">
+                            P2 SAVE ZONE (ARROWS)
+                          </span>
+                          <div className="absolute inset-x-3 top-4 bottom-2 border-t-2 border-x-2 border-white/30 rounded-t-sm" />
+                          <div
+                            className="absolute border-2 border-[#38BDF8] bg-[#38BDF8]/30 rounded-sm pointer-events-none"
+                            style={{
+                              left: `${((snapshot.saveArea.x + 1) / 2) * 100}%`,
+                              top: `${((1 - snapshot.saveArea.y) / 2) * 100}%`,
+                              width: `${snapshot.saveArea.rx * 100}%`,
+                              height: `${snapshot.saveArea.ry * 100}%`,
+                              transform: 'translate(-50%, -50%)',
+                            }}
+                          />
+                        </div>
+                      )}
 
                       <div className="pointer-events-auto flex items-center gap-3 ml-auto">
                         {/* Oscillating Shot Power Meter */}
@@ -1339,7 +1410,7 @@ export function PenaltyShootoutPage() {
                             if (snapshot.isPowerActive) gameRef.current?.releaseTouchShot();
                           }}
                           disabled={snapshot.phase !== 'ready'}
-                          className="h-14 min-w-[112px] rounded-2xl bg-[#22C55E] active:scale-95 hover:bg-[#16A34A] px-5 text-xs font-black text-black shadow-xl shadow-[#22C55E]/30 disabled:opacity-40 touch-none"
+                          className="h-14 min-w-[116px] rounded-2xl bg-[#22C55E] active:scale-95 hover:bg-[#16A34A] px-5 text-xs font-black text-black shadow-xl shadow-[#22C55E]/30 disabled:opacity-40 touch-none"
                         >
                           {snapshot.isPowerActive ? 'RELEASE!' : 'HOLD TO SHOOT'}
                         </button>
@@ -1347,28 +1418,87 @@ export function PenaltyShootoutPage() {
                     </>
                   )}
 
-                  {/* Keeper Touch Dive Buttons (Save Mode OR Simultaneous 2P) */}
-                  {(snapshot.activeControlRole === 'save' ||
-                    (mode === 'local-2p' && local2pStyle === 'simultaneous')) && (
-                    <div className="pointer-events-auto ml-auto flex items-center gap-1.5 rounded-2xl border border-white/15 bg-[#080C0F]/90 p-2">
-                      <Shield size={14} className="text-[#FACC15] mx-1 hidden sm:block" />
-                      {[
-                        { label: '↖ Top L', dir: { x: -1, y: 0.65 } },
-                        { label: '↙ Low L', dir: { x: -1, y: -0.25 } },
-                        { label: '⬆ Center', dir: { x: 0, y: 0.45 } },
-                        { label: '↘ Low R', dir: { x: 1, y: -0.25 } },
-                        { label: '↗ Top R', dir: { x: 1, y: 0.65 } },
-                      ].map((btn) => (
-                        <button
-                          key={btn.label}
-                          type="button"
-                          onClick={() => gameRef.current?.triggerTouchDive(btn.dir)}
-                          className="min-h-[44px] rounded-xl border border-white/15 bg-[#121820] hover:border-[#FACC15] active:bg-[#FACC15] active:text-black px-2.5 py-2 text-[11px] font-bold text-white transition-colors"
+                  {/* Keeper Goal Save Zone Selector Pad + Quick Zones + Lock Save Button */}
+                  {snapshot.activeControlRole === 'save' && (
+                    <>
+                      <div className="pointer-events-auto flex items-end gap-2">
+                        <div
+                          ref={savePadRef}
+                          onPointerDown={(e) => {
+                            e.stopPropagation();
+                            updateZoneFromPadPointer(savePadRef.current, e.clientX, e.clientY, 'save');
+                          }}
+                          onPointerMove={(e) => {
+                            if (e.buttons > 0 || e.pointerType !== 'mouse') {
+                              e.stopPropagation();
+                              updateZoneFromPadPointer(savePadRef.current, e.clientX, e.clientY, 'save');
+                            }
+                          }}
+                          className="relative h-24 w-44 rounded-2xl border border-[#38BDF8]/40 bg-[#080C0F]/90 touch-none cursor-crosshair overflow-hidden"
                         >
-                          {btn.label}
+                          <span className="absolute top-1 left-2 text-[9px] font-mono font-bold text-[#38BDF8]">
+                            SAVE ZONE PAD
+                          </span>
+                          <div className="absolute inset-x-3 top-4 bottom-2 border-t-2 border-x-2 border-white/30 rounded-t-sm" />
+                          {/* Revealed Striker Shot Zone on execution */}
+                          {snapshot.revealShotArea && (
+                            <div
+                              className="absolute border-2 border-[#FACC15] bg-[#FACC15]/25 rounded-sm pointer-events-none"
+                              style={{
+                                left: `${((snapshot.shotArea.x + 1) / 2) * 100}%`,
+                                top: `${((1 - snapshot.shotArea.y) / 2) * 100}%`,
+                                width: `${snapshot.shotArea.rx * 100}%`,
+                                height: `${snapshot.shotArea.ry * 100}%`,
+                                transform: 'translate(-50%, -50%)',
+                              }}
+                            />
+                          )}
+                          {/* Keeper Selected Save Zone */}
+                          <div
+                            className="absolute border-2 border-[#38BDF8] bg-[#38BDF8]/30 rounded-sm pointer-events-none"
+                            style={{
+                              left: `${((snapshot.saveArea.x + 1) / 2) * 100}%`,
+                              top: `${((1 - snapshot.saveArea.y) / 2) * 100}%`,
+                              width: `${snapshot.saveArea.rx * 100}%`,
+                              height: `${snapshot.saveArea.ry * 100}%`,
+                              transform: 'translate(-50%, -50%)',
+                            }}
+                          />
+                        </div>
+
+                        <div className="hidden sm:grid grid-cols-3 gap-1 rounded-xl border border-white/10 bg-[#080C0F]/90 p-1.5">
+                          {[
+                            { label: '↖', x: -0.68, y: 0.5 },
+                            { label: '⬆', x: 0, y: 0.52 },
+                            { label: '↗', x: 0.68, y: 0.5 },
+                            { label: '↙', x: -0.68, y: -0.45 },
+                            { label: '⬇', x: 0, y: -0.45 },
+                            { label: '↘', x: 0.68, y: -0.45 },
+                          ].map((p) => (
+                            <button
+                              key={p.label}
+                              type="button"
+                              onClick={() => gameRef.current?.setActiveZoneFromNormalized(p.x, p.y, 'save')}
+                              className="h-7 w-7 rounded-md bg-[#121820] hover:bg-[#38BDF8] hover:text-black text-[11px] font-bold text-slate-200 transition-colors"
+                            >
+                              {p.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="pointer-events-auto ml-auto flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => gameRef.current?.confirmTouchSaveZone()}
+                          disabled={snapshot.phase !== 'ready' && snapshot.phase !== 'countdown'}
+                          className="h-14 inline-flex items-center gap-2 rounded-2xl bg-[#38BDF8] hover:bg-[#0EA5E9] active:scale-95 px-5 text-xs font-black text-black shadow-xl shadow-[#38BDF8]/25 disabled:opacity-40"
+                        >
+                          <Shield size={16} />
+                          <span>LOCK SAVE ZONE</span>
                         </button>
-                      ))}
-                    </div>
+                      </div>
+                    </>
                   )}
                 </div>
               )}

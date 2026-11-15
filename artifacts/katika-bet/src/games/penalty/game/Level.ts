@@ -4,7 +4,7 @@
  */
 import * as THREE from 'three';
 import type { AssetManager } from '../assets/AssetManager';
-import type { StadiumTheme, TeamConfig } from '../types';
+import type { GoalRegion, StadiumTheme, TeamConfig } from '../types';
 import type { GoalBounds } from '../utils/Physics';
 
 export class Level {
@@ -31,6 +31,10 @@ export class Level {
   private netRippleStrength = 0;
   private netRippleCenter = new THREE.Vector2(0, 1.2);
 
+  // 3D Goal Zone Selection overlays (Striker shot area + Goalkeeper save area)
+  private shotZoneGroup = new THREE.Group();
+  private saveZoneGroup = new THREE.Group();
+
   constructor(
     private scene: THREE.Scene,
     private assets: AssetManager,
@@ -51,6 +55,7 @@ export class Level {
     this.createLights();
     this.createField();
     this.createGoal();
+    this.createGoalZoneOverlays();
     this.createCartoonStadium(homeTeam, awayTeam);
 
     this.scene.add(this.root);
@@ -283,6 +288,72 @@ export class Level {
     this.disposables.push(sideGeo, topGeo);
 
     this.root.add(goalGroup);
+  }
+
+  private createGoalZoneOverlays(): void {
+    const buildZoneMesh = (color: string, opacity: number, zOffset: number, targetGroup: THREE.Group) => {
+      const planeGeo = new THREE.PlaneGeometry(1, 1);
+      const fillMat = new THREE.MeshBasicMaterial({
+        color,
+        transparent: true,
+        opacity,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      });
+      const fillMesh = new THREE.Mesh(planeGeo, fillMat);
+
+      const edgesGeo = new THREE.EdgesGeometry(planeGeo);
+      const borderMat = new THREE.LineBasicMaterial({
+        color,
+        transparent: true,
+        opacity: 0.95,
+      });
+      const borderMesh = new THREE.LineSegments(edgesGeo, borderMat);
+      borderMesh.position.z = 0.005;
+
+      targetGroup.add(fillMesh, borderMesh);
+      targetGroup.position.z = zOffset;
+      targetGroup.visible = false;
+      this.root.add(targetGroup);
+      this.disposables.push(planeGeo, fillMat, edgesGeo, borderMat);
+    };
+
+    // Goalkeeper save zone (cyan) slightly in front of goal line, Striker shot zone (gold) just ahead
+    buildZoneMesh('#38BDF8', 0.28, 0.08, this.saveZoneGroup);
+    buildZoneMesh('#FACC15', 0.26, 0.14, this.shotZoneGroup);
+  }
+
+  public goalRegionToWorldCenter(region: GoalRegion): { x: number; y: number } {
+    const x = region.x * (this.goalWidth / 2);
+    const y = THREE.MathUtils.clamp(((region.y + 1) / 2) * this.goalHeight, 0.2, this.goalHeight - 0.12);
+    return { x, y };
+  }
+
+  public updateGoalZones(
+    shotArea: GoalRegion,
+    saveArea: GoalRegion,
+    showShot: boolean,
+    showSave: boolean,
+  ): void {
+    this.shotZoneGroup.visible = showShot;
+    if (showShot) {
+      const sx = shotArea.x * (this.goalWidth / 2);
+      const sy = ((shotArea.y + 1) / 2) * this.goalHeight;
+      const sw = Math.max(0.2, shotArea.rx * this.goalWidth);
+      const sh = Math.max(0.2, shotArea.ry * this.goalHeight);
+      this.shotZoneGroup.position.set(sx, sy, 0.14);
+      this.shotZoneGroup.scale.set(sw, sh, 1);
+    }
+
+    this.saveZoneGroup.visible = showSave;
+    if (showSave) {
+      const kx = saveArea.x * (this.goalWidth / 2);
+      const ky = ((saveArea.y + 1) / 2) * this.goalHeight;
+      const kw = Math.max(0.2, saveArea.rx * this.goalWidth);
+      const kh = Math.max(0.2, saveArea.ry * this.goalHeight);
+      this.saveZoneGroup.position.set(kx, ky, 0.08);
+      this.saveZoneGroup.scale.set(kw, kh, 1);
+    }
   }
 
   private createCartoonStadium(homeTeam: TeamConfig, awayTeam: TeamConfig): void {

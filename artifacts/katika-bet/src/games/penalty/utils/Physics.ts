@@ -5,6 +5,7 @@
  * and calibrated goalkeeper reach.
  */
 import * as THREE from 'three';
+import type { GoalRegion } from '../types';
 
 export interface Vec2 {
   x: number;
@@ -48,6 +49,62 @@ export function calculateBallTrajectory(
   velocity.y += (Math.random() * 2 - 1) * randomFactor * 1.4;
 
   return velocity;
+}
+
+/**
+ * Exact analytical initial velocity to fly from penalty spot (0, 0.22, 11)
+ * to a chosen point on the goal plane (target.x, target.y, 0) under drag & gravity.
+ */
+export function calculateBallVelocityToTarget(
+  target: Vec2,
+  power: number,
+  startPos: Vec3 = { x: 0, y: 0.22, z: 11 },
+): Vec3 {
+  const clampedPower = Math.max(0.25, Math.min(1, power));
+  const vz = -(20 + clampedPower * 22); // -25.5 m/s .. -42 m/s (~0.30s..0.48s flight)
+  const k = -Math.log(0.58); // ~0.544727/s drag constant matching updateBallPhysics
+  const g = 9.8;
+
+  const dz = startPos.z; // 11m to goal line (z = 0)
+  const ratio = Math.min(0.92, (dz * k) / Math.abs(vz));
+  const flightTime = -Math.log(1 - ratio) / k;
+  const denom = 1 - Math.exp(-k * flightTime);
+
+  const vx = ((target.x - startPos.x) * k) / denom;
+  const vy = ((target.y - startPos.y + (g / k) * flightTime) * k) / denom - g / k;
+
+  return { x: vx, y: vy, z: vz };
+}
+
+/**
+ * Compute how much of the Striker's selected shot area overlaps the Goalkeeper's selected save area,
+ * and convert that overlap fraction directly into save probability (0..0.95).
+ */
+export function calculateGoalRegionOverlap(
+  shotArea: GoalRegion,
+  saveArea: GoalRegion,
+): { overlapRatio: number; saveProbability: number } {
+  const sLeft = shotArea.x - shotArea.rx;
+  const sRight = shotArea.x + shotArea.rx;
+  const sBottom = shotArea.y - shotArea.ry;
+  const sTop = shotArea.y + shotArea.ry;
+
+  const kLeft = saveArea.x - saveArea.rx;
+  const kRight = saveArea.x + saveArea.rx;
+  const kBottom = saveArea.y - saveArea.ry;
+  const kTop = saveArea.y + saveArea.ry;
+
+  const iWidth = Math.max(0, Math.min(sRight, kRight) - Math.max(sLeft, kLeft));
+  const iHeight = Math.max(0, Math.min(sTop, kTop) - Math.max(sBottom, kBottom));
+  const intersectionArea = iWidth * iHeight;
+  const totalShotArea = Math.max(0.0001, (2 * shotArea.rx) * (2 * shotArea.ry));
+
+  const overlapRatio = THREE.MathUtils.clamp(intersectionArea / totalShotArea, 0, 1);
+  // Zero overlap = 0% save chance; 100% overlap = 95% save chance
+  const saveProbability =
+    overlapRatio <= 0.005 ? 0 : THREE.MathUtils.clamp(overlapRatio * 0.95, 0, 0.95);
+
+  return { overlapRatio, saveProbability };
 }
 
 /**
