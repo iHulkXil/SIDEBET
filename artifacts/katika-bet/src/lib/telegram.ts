@@ -16,6 +16,7 @@ export interface TelegramWebApp {
     user?: TelegramUser;
     auth_date?: string;
     hash?: string;
+    start_param?: string;
   };
   version: string;
   platform: string;
@@ -63,6 +64,7 @@ export interface TelegramWebApp {
   enableClosingConfirmation: () => void;
   openTelegramLink: (url: string) => void;
   openLink: (url: string) => void;
+  openInvoice: (url: string, cb: (status: string) => void) => void;
 }
 
 declare global {
@@ -103,13 +105,16 @@ export function getTelegramUser(): TelegramUser {
   if (tg?.initDataUnsafe?.user) {
     return tg.initDataUnsafe.user;
   }
-  // Fallback for browser testing
   return {
     id: 123456789,
     first_name: 'Player',
-    username: 'katika_player',
+    username: 'sidebet_player',
     photo_url: '',
   };
+}
+
+export function getStartParam(): string | undefined {
+  return getTelegramWebApp()?.initDataUnsafe?.start_param;
 }
 
 export function triggerHaptic(style: 'light' | 'medium' | 'heavy' = 'medium') {
@@ -118,11 +123,8 @@ export function triggerHaptic(style: 'light' | 'medium' | 'heavy' = 'medium') {
     try {
       tg.HapticFeedback.impactOccurred(style);
       return;
-    } catch {
-      // Ignored
-    }
+    } catch {}
   }
-  // Browser fallback
   if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
     navigator.vibrate(style === 'heavy' ? 25 : style === 'medium' ? 15 : 8);
   }
@@ -134,11 +136,17 @@ export function triggerHapticNotification(type: 'success' | 'warning' | 'error')
     try {
       tg.HapticFeedback.notificationOccurred(type);
       return;
-    } catch {
-      // Ignored
-    }
+    } catch {}
   }
   if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
     navigator.vibrate([15, 30, 20]);
   }
+}
+
+export async function openStarsInvoice(invoiceUrl: string): Promise<'paid' | 'cancelled' | 'failed' | 'pending'> {
+  const tg = getTelegramWebApp();
+  if (!tg?.openInvoice) return 'failed';
+  return new Promise((resolve) => {
+    tg.openInvoice(invoiceUrl, (status) => resolve(status as any));
+  });
 }
