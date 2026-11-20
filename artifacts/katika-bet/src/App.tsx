@@ -18,6 +18,7 @@ import { GlobalChatPage } from '@/components/global-chat';
 import { KycOnboardingModal } from '@/components/kyc-onboarding-modal';
 import { KycProvider, useKyc } from '@/lib/kyc';
 import { Link, Route, Switch, Router as WouterRouter, useLocation } from 'wouter';
+import { initTelegramWebApp } from '@/lib/telegram';
 
 const queryClient = new QueryClient();
 
@@ -52,6 +53,10 @@ function Router() {
   const [location, setLocation] = useLocation();
 
   const unlocked = Boolean(authenticated && isKycComplete);
+
+  useEffect(() => {
+    initTelegramWebApp();
+  }, []);
 
   useEffect(() => {
     if (ready && !kycLoading && !unlocked && location !== '/') {
