@@ -16,6 +16,7 @@ import ballRouter from "./ball";
 import marketsRouter from "./markets";
 import kycRouter from "./kyc";
 import chatRouter from "./chat";
+import telegramRouter from "./telegram";
 
 const router: IRouter = Router();
 router.use(healthRouter);
@@ -35,4 +36,5 @@ router.use(pvpRouter);
 router.use(cashierRouter);
 router.use(tapRouter);
 router.use(ballRouter);
+router.use('/telegram', telegramRouter);
 export default router;
