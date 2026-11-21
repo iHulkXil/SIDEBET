@@ -2,13 +2,17 @@ import { useState, useEffect } from 'react';
 import { Link } from 'wouter';
 import { usePrivy, useWallets as useEvmWallets } from '@privy-io/react-auth';
 import { useWallets } from '@privy-io/react-auth/solana';
-import { ArrowUpRight, Copy, Check, Plus, LayoutGrid } from 'lucide-react';
+import { ArrowUpRight, Copy, Check, Plus, LayoutGrid, Star } from 'lucide-react';
 import { MainnetDepositWithdrawModal } from '@/components/mainnet-deposit-modal';
 import { NotificationsMenu } from '@/components/notifications-menu';
 import { MyBets } from '@/components/my-bets';
 import { fetchPositions, type Position } from '@/lib/markets-api';
 import { useUserAvatar } from '@/lib/avatar';
 import { useUserWalletBalance } from '@/lib/balance';
+import { getTelegramWebApp, openStarsInvoice, isTelegramWebApp, triggerHaptic } from '@/lib/telegram';
+import { useToast } from '@/hooks/use-toast';
+
+const API_BASE = import.meta.env.VITE_API_BASE || '';
 
 export function CryptoWalletDashboard() {
   const { authenticated, user } = usePrivy();
@@ -16,15 +20,18 @@ export function CryptoWalletDashboard() {
   const { wallets: evmWallets } = useEvmWallets();
   const { avatarUrl } = useUserAvatar();
   const { balance, setBalance } = useUserWalletBalance();
+  const { toast } = useToast();
 
   const [modalOpen, setModalOpen] = useState(false);
   const [modalMode, setModalMode] = useState<'deposit' | 'withdraw'>('deposit');
   const [copied, setCopied] = useState(false);
   const [positions, setPositions] = useState<Position[]>([]);
+  const [starsLoading, setStarsLoading] = useState(false);
 
   const activeSolAddr = wallets?.[0]?.address;
   const activeEvmAddr = evmWallets?.[0]?.address || user?.wallet?.address;
   const walletAddress = activeSolAddr || activeEvmAddr || '';
+  const inTelegram = isTelegramWebApp();
 
   useEffect(() => {
     let mounted = true;
@@ -54,6 +61,51 @@ export function CryptoWalletDashboard() {
     navigator.clipboard.writeText(walletAddress);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const buyWithStars = async (amountStars: number) => {
+    const tg = getTelegramWebApp();
+    if (!tg?.initData) {
+      toast({ title: 'Open in Telegram', description: 'Stars payments only work inside the Telegram Mini App.' });
+      return;
+    }
+    setStarsLoading(true);
+    triggerHaptic('light');
+    try {
+      const res = await fetch(`${API_BASE}/api/telegram/stars/invoice`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-telegram-init-data': tg.initData,
+        },
+        body: JSON.stringify({ amountStars, description: `${amountStars} Stars → $${(amountStars / 100).toFixed(2)} credit` }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+
+      const status = await openStarsInvoice(data.invoiceUrl);
+      if (status === 'paid') {
+        // Claim credit from server
+        const claim = await fetch(`${API_BASE}/api/telegram/stars/claim`, {
+          method: 'POST',
+          headers: { 'x-telegram-init-data': tg.initData },
+        });
+        if (claim.ok) {
+          const { creditUsd } = await claim.json();
+          if (creditUsd > 0) {
+            setBalance(balance + creditUsd);
+            toast({ title: 'Credit added', description: `+$${creditUsd.toFixed(2)} from Telegram Stars` });
+            triggerHaptic('success' as any);
+          }
+        }
+      } else if (status === 'cancelled') {
+        toast({ title: 'Cancelled', description: 'Payment was cancelled.' });
+      }
+    } catch (err: any) {
+      toast({ title: 'Stars payment failed', description: err.message || 'Try again', variant: 'destructive' });
+    } finally {
+      setStarsLoading(false);
+    }
   };
 
   return (
@@ -109,7 +161,7 @@ export function CryptoWalletDashboard() {
           </div>
         </header>
 
-        {/* My Balance — moved to top */}
+        {/* My Balance */}
         <section className="relative overflow-hidden rounded-3xl border border-emerald-900/40 bg-gradient-to-br from-[#0B1A14] via-[#091510] to-[#060D0A] p-6 shadow-xl">
           <div className="flex items-center justify-between">
             <span className="text-sm font-semibold tracking-wide text-white">My Balance</span>
@@ -145,6 +197,27 @@ export function CryptoWalletDashboard() {
               >
                 {copied ? <Check size={14} className="text-[#4ade80]" /> : <Copy size={14} />}
               </button>
+            </div>
+          )}
+
+          {/* Telegram Stars top-up */}
+          {inTelegram && (
+            <div className="mt-5 space-y-2">
+              <p className="text-[11px] text-slate-400">Top up with Telegram Stars</p>
+              <div className="flex flex-wrap gap-2">
+                {[100, 500, 1000].map((stars) => (
+                  <button
+                    key={stars}
+                    disabled={starsLoading}
+                    onClick={() => buyWithStars(stars)}
+                    className="inline-flex items-center gap-1.5 rounded-full border border-amber-400/40 bg-amber-500/10 hover:bg-amber-500/20 px-3 py-1.5 text-xs font-semibold text-amber-300 disabled:opacity-50"
+                  >
+                    <Star size={12} className="fill-amber-400 text-amber-400" />
+                    {stars} Stars
+                    <span className="text-[10px] text-amber-200/70">(${(stars / 100).toFixed(2)})</span>
+                  </button>
+                ))}
+              </div>
             </div>
           )}
         </section>
