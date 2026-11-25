@@ -8,7 +8,15 @@ TELEGRAM_BOT_TOKEN=your_bot_token_from_BotFather
 2. Or use /newapp
 
 ## Deep links
-t.me/yourbot/app?startapp=market_<id>
+Share a market with:
+```
+t.me/YOUR_BOT_USERNAME/app?startapp=market_<marketId>
+```
+Example:
+```
+t.me/sidebetbot/app?startapp=market_obi-2027-coalition
+```
+The app opens and auto-loads that market detail.
 
 ## Stars payments
 - POST /api/telegram/stars/invoice { amountStars }
@@ -17,6 +25,6 @@ t.me/yourbot/app?startapp=market_<id>
 - Webhook: POST /api/telegram/stars/webhook (set in BotFather)
 
 ## Next
-- Credit user balance on successful_payment webhook
-- Deep link to market detail on start_param
+- Credit user balance on successful_payment webhook (done)
+- Deep link to market detail on start_param (done)
 - Mobile layout polish already present in layout-shell
