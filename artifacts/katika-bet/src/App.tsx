@@ -18,7 +18,7 @@ import { GlobalChatPage } from '@/components/global-chat';
 import { KycOnboardingModal } from '@/components/kyc-onboarding-modal';
 import { KycProvider, useKyc } from '@/lib/kyc';
 import { Link, Route, Switch, Router as WouterRouter, useLocation } from 'wouter';
-import { initTelegramWebApp } from '@/lib/telegram';
+import { initTelegramWebApp, getStartParam } from '@/lib/telegram';
 
 const queryClient = new QueryClient();
 
@@ -56,7 +56,16 @@ function Router() {
 
   useEffect(() => {
     initTelegramWebApp();
-  }, []);
+
+    // Deep link: t.me/bot/app?startapp=market_<id>
+    const start = getStartParam();
+    if (start && start.startsWith('market_')) {
+      const marketId = start.slice('market_'.length);
+      if (marketId) {
+        setLocation(`/markets?open=${encodeURIComponent(marketId)}`);
+      }
+    }
+  }, [setLocation]);
 
   useEffect(() => {
     if (ready && !kycLoading && !unlocked && location !== '/') {
