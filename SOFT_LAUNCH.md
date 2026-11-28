@@ -1,49 +1,50 @@
-# Katika soft launch
+# SIDEBET Soft Launch Guide
 
-## Neon (done if mint persists after Render sleep)
+SIDEBET is a Yes/No prediction markets and PvP platform launching primarily as a Telegram Mini App.
 
-```sql
-ALTER TABLE legends ADD COLUMN IF NOT EXISTS perk_id text;
-ALTER TABLE legends ADD COLUMN IF NOT EXISTS ruleset integer NOT NULL DEFAULT 1;
-ALTER TABLE legends ADD COLUMN IF NOT EXISTS token_id integer;
-ALTER TABLE legends ADD COLUMN IF NOT EXISTS mint jsonb;
-```
+## Architecture
 
-## Deploy
+- **Frontend (`artifacts/katika-bet`)**: Vite + React deployed on Vercel (`vercel.json` proxies `/api/*` to Render).
+- **Backend (`artifacts/api-server`)**: Express API deployed on Render (`https://katika-w8bs.onrender.com`).
+- **Auth**: Privy (Email, Google, Solana/EVM wallets).
+- **Persistence**: Markets, positions, server-side USD balances, Telegram Stars credits, and admin auth state persist in JSON files under `.data/`.
+- **Payments**:
+  - **Telegram Stars**: `100 Stars = $1.00 USD` credit via `POST /api/telegram/stars/invoice`, webhook `POST /api/telegram/stars/webhook`, and claim `POST /api/telegram/stars/claim`.
+  - **Solana Treasury**: Direct SOL transfers to `7MYUSRzd7hJEmW1zDVafw4BNuYFt84tKAz5evM8i8fs3` with server-side USD balance fallback.
 
-1. Render API deploy (after env + Neon).
-2. Vercel frontend deploy.
-3. `GET https://katika-w8bs.onrender.com/api/healthz` → `{ "status": "ok" }`.
+## Required Environment Variables (Render)
 
-## New-account loop
+Set these on the Render service before public launch:
 
-1. Fresh email / Google sign-in.
-2. Grant **600 KTK** on floor.
-3. First legend lock ≤ **333**.
-4. Playable remainder must 10× rollover before realloc / remint.
-5. Tables cap **50** KTK, or **75** with Stake +.
-6. Mint costs **$1**. Today that is **10 KTK** unless `STRIPE_SECRET_KEY` is set on Render.
+- `PRIVY_APP_ID` / `PRIVY_APP_SECRET`
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_WEBHOOK_SECRET` (recommended — match with `secret_token` in Telegram `setWebhook`)
+- `ADMIN_PASSCODE` (recommended — protects `POST /api/markets/:id/resolve`; if unset, first-run bootstrap via `/admin` claims a salted hash)
 
-## Mint fee modes
+## Deployment Checks
 
-| Env on Render | What mint does |
-| --- | --- |
-| no Stripe key | Debit 10 KTK (`$1` stand-in) |
-| `STRIPE_SECRET_KEY` + `STRIPE_PRICE_ID` | Checkout $1, then mint |
+1. Deploy backend on Render and verify:
+   - `GET https://katika-w8bs.onrender.com/api/health` → `{ "status": "ok" }`
+   - `GET https://katika-w8bs.onrender.com/api/healthz` → `{ "status": "ok" }`
+   - `GET https://katika-w8bs.onrender.com/api/markets` → returns seeded markets (Nigerian Politics, Politics, Crypto, Sports, Finance, Lifestyle) starting at `0` volume until real wagers are placed.
+2. Deploy frontend on Vercel and confirm `/api/markets` resolves through the Vercel rewrite.
+3. Confirm BotFather Menu Button / Web App URL points to the live Vercel origin.
 
-Add later, do not block launch:
+## Core Soft-Launch User Flow
 
-- `STRIPE_SECRET_KEY`
-- `STRIPE_PRICE_ID` (one-time $1 price)
-- `PUBLIC_APP_URL` (Vercel origin for success/cancel)
+1. Open SIDEBET in Telegram (directly or via `t.me/YOUR_BOT/app?startapp=market_<marketId>`).
+2. Confirm the first-open **18+ & Jurisdiction Notice**, sign in via Privy, and complete basic KYC.
+3. Browse or open a market, click **Yes** or **No** to open the order ticket, choose or edit a stake amount (`0.05 / 0.1 / 0.25 / 0.5 / 1 SOL` or custom decimal with live USD estimate), and submit.
+4. Top up balance with **Telegram Stars** (`100 / 500 / 1000 Stars`) on the Wallet page if needed; credits sync into the server-side balance ledger across devices.
+5. Track open and settled wagers under **My Bets**.
+6. Settle markets via the **Settle / Admin** modal (or `/admin` route) using the admin passcode — winning positions automatically credit winners' server-side USD balances.
 
-## Pass / fail
+## Launch Checklist
 
-- [ ] healthz ok
-- [ ] 600 grant
-- [ ] 333 first-card cap
-- [ ] 10× rollover math
-- [ ] mint persists after Render restart
-- [ ] 10 KTK leaves the floor on mint
-- [ ] Stake + allows 75, rejects 80
-- [ ] four tables play
+- [ ] `/api/health` and `/api/healthz` return `ok`
+- [ ] `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, and `ADMIN_PASSCODE` set on Render
+- [ ] Telegram webhook registered and returning `200`
+- [ ] Deep link `?startapp=market_obi-2027-coalition` opens target market (even after sign-in/KYC)
+- [ ] Order ticket opens cleanly on Yes/No click with editable SOL input, quick chips, and USD estimate
+- [ ] Stars purchase → webhook credit → claim → server balance updates across reloads
+- [ ] Admin resolves a test market → winner balance increases automatically and position shows `WON · CREDITED`

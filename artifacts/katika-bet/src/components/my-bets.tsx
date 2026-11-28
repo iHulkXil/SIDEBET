@@ -5,7 +5,7 @@ import { usePrivy } from '@privy-io/react-auth';
 import { fetchPositions, claimWinnings, type Position } from '@/lib/markets-api';
 import { useToast } from '@/hooks/use-toast';
 import { pushNotification } from '@/lib/notifications';
-import { getWalletBalance, setWalletBalance } from '@/lib/balance';
+import { SOL_USD_RATE, useUserWalletBalance } from '@/lib/balance';
 import { SOLANA_CLUSTER_NAME } from '@/main';
 
 type AutoPvpSettlement = {
@@ -22,6 +22,7 @@ type AutoPvpSettlement = {
 
 export function MyBets() {
   const { user, authenticated, getAccessToken } = usePrivy();
+  const { balance, setBalance, refreshBalance } = useUserWalletBalance();
   const { toast } = useToast();
   const [positions, setPositions] = useState<Position[]>([]);
   const [pvpSettlements, setPvpSettlements] = useState<AutoPvpSettlement[]>([]);
@@ -32,7 +33,7 @@ export function MyBets() {
 
   const loadPositions = useCallback(async () => {
     try {
-      const data = await fetchPositions(walletAddress);
+      const data = await fetchPositions(walletAddress, user?.id);
       setPositions(data);
 
       if (authenticated) {
@@ -54,20 +55,28 @@ export function MyBets() {
     } finally {
       setLoading(false);
     }
-  }, [walletAddress, authenticated, getAccessToken]);
+  }, [walletAddress, user?.id, authenticated, getAccessToken]);
 
   useEffect(() => {
     void loadPositions();
-  }, [loadPositions]);
+    if (authenticated) {
+      void refreshBalance();
+    }
+  }, [loadPositions, authenticated, refreshBalance]);
 
   const handleClaim = async (posId: string) => {
     setClaimingId(posId);
     try {
-      const payout = await claimWinnings(posId);
-      // Credit to user cash balance
-      const currentBal = getWalletBalance(user?.id);
-      const payoutUsd = payout * 148.5; // ~148.50 per SOL
-      setWalletBalance(user?.id, currentBal + payoutUsd);
+      const token = await getAccessToken().catch(() => null);
+      const result = await claimWinnings(posId, token);
+      const payout = result.claimedAmount;
+      const payoutUsd = result.claimedUsd ?? payout * SOL_USD_RATE;
+
+      if (typeof result.balanceUsd === 'number') {
+        setBalance(result.balanceUsd, true);
+      } else {
+        setBalance(balance + payoutUsd);
+      }
 
       toast({
         title: 'Winnings Claimed!',
@@ -180,13 +189,17 @@ export function MyBets() {
                         isWon
                           ? 'bg-[#22c55e] text-black font-bold shadow-md shadow-[#22c55e]/30'
                           : isClaimed
-                          ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
+                          ? 'bg-[#22c55e]/20 text-[#4ade80] border border-[#22c55e]/40'
                           : isLost
                           ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
                           : 'bg-[#22c55e]/10 border border-[#22c55e]/20 text-[#4ade80]'
                       }`}
                     >
-                      {p.status === 'open' ? 'OPEN · ADMIN SETTLE' : p.status}
+                      {p.status === 'open'
+                        ? 'OPEN · ADMIN SETTLE'
+                        : isClaimed
+                        ? 'WON · CREDITED'
+                        : p.status}
                     </span>
 
                     {/* Claim Button for Won positions */}
@@ -213,12 +226,18 @@ export function MyBets() {
                 </h3>
 
                 <div className="mt-3.5 flex flex-wrap items-center justify-between gap-2 border-t border-white/5 pt-3 text-xs text-slate-400 font-mono">
-                  <div className="flex items-center gap-3">
-                    <span>Stake: <strong className="text-white font-bold">{p.amount} SOL</strong></span>
+                  <div className="flex flex-wrap items-center gap-2.5">
+                    <span>
+                      Stake: <strong className="text-white font-bold">{p.amount} SOL</strong>{' '}
+                      <span className="text-[10px] text-slate-500">(≈${(p.amount * SOL_USD_RATE).toFixed(2)})</span>
+                    </span>
                     <span>·</span>
                     <span>
                       {isWon || isClaimed ? 'Payout' : 'Potential Return'}:{' '}
-                      <strong className="text-[#4ade80] font-bold">+{potentialWin} SOL</strong>
+                      <strong className="text-[#4ade80] font-bold">+{potentialWin} SOL</strong>{' '}
+                      <span className="text-[10px] text-slate-500">
+                        (≈${(p.payoutUsd ?? Number(potentialWin) * SOL_USD_RATE).toFixed(2)})
+                      </span>
                     </span>
                   </div>
 

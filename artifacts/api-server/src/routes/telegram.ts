@@ -1,7 +1,10 @@
 import { Router } from 'express';
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { createStarsInvoice, verifyInitData } from '../lib/telegram';
+import { authenticateRequest } from '../lib/privy-auth';
+import { creditUserBalanceUsd, getUserBalanceUsd } from '../lib/balance-ledger';
 
 const router = Router();
 
@@ -48,6 +51,16 @@ function saveCharges(charges: Set<string>) {
   }
 }
 
+function verifyWebhookSecret(headerToken: string | undefined): boolean {
+  const expected = (process.env.TELEGRAM_WEBHOOK_SECRET || '').trim();
+  if (!expected) return true; // Optional until configured on Render + setWebhook
+  const received = (headerToken || '').trim();
+  const a = Buffer.from(received, 'utf-8');
+  const b = Buffer.from(expected, 'utf-8');
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
+
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 
 async function answerPreCheckout(queryId: string, ok: boolean, errorMessage?: string) {
@@ -66,7 +79,17 @@ async function answerPreCheckout(queryId: string, ok: boolean, errorMessage?: st
 // Create Stars invoice for depositing credit (100 Stars ≈ $1)
 router.post('/stars/invoice', async (req, res) => {
   try {
-    const { amountStars = 100, description = 'SIDEBET wallet credit' } = req.body;
+    const { amountStars = 100, description = 'SIDEBET wallet credit' } = req.body ?? {};
+    const parsedStars = Math.floor(Number(amountStars));
+    if (!Number.isFinite(parsedStars) || parsedStars < 10 || parsedStars > 100000) {
+      return res.status(400).json({ error: 'amountStars must be between 10 and 100000' });
+    }
+
+    const safeDesc =
+      typeof description === 'string' && description.trim().length > 0
+        ? description.trim().slice(0, 180)
+        : 'SIDEBET wallet credit';
+
     const initData = (req.headers['x-telegram-init-data'] as string) || '';
     const verified = verifyInitData(initData);
     if (!verified.ok || !verified.user) {
@@ -75,24 +98,24 @@ router.post('/stars/invoice', async (req, res) => {
 
     const payload = JSON.stringify({
       userId: verified.user.id,
-      amountStars: Number(amountStars),
+      amountStars: parsedStars,
       ts: Date.now(),
     });
 
     const invoiceUrl = await createStarsInvoice(
       'SIDEBET Credit',
-      description,
-      Number(amountStars),
+      safeDesc,
+      parsedStars,
       payload
     );
 
-    res.json({ invoiceUrl, amountStars: Number(amountStars) });
+    res.json({ invoiceUrl, amountStars: parsedStars });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'invoice failed' });
   }
 });
 
-// Claim pending credit into client balance (called after successful openInvoice)
+// Claim pending credit into server-side user balance ledger (called after successful openInvoice)
 router.post('/stars/claim', async (req, res) => {
   try {
     const initData = (req.headers['x-telegram-init-data'] as string) || '';
@@ -101,15 +124,33 @@ router.post('/stars/claim', async (req, res) => {
       return res.status(401).json({ error: 'invalid init data' });
     }
 
-    const userId = String(verified.user.id);
+    let privyUserId: string | null = null;
+    if (typeof req.headers.authorization === 'string' && req.headers.authorization.startsWith('Bearer ')) {
+      try {
+        const identity = await authenticateRequest(req);
+        privyUserId = identity.privyUserId;
+      } catch {
+        // Proceed with Telegram-only fallback if Privy token is missing/invalid
+      }
+    }
+
+    const tgUserId = String(verified.user.id);
     const ledger = loadCredits();
-    const credit = ledger[userId] || 0;
+    const credit = Number((ledger[tgUserId] || 0).toFixed(2));
     if (credit > 0) {
-      ledger[userId] = 0;
+      ledger[tgUserId] = 0;
       saveCredits(ledger);
     }
 
-    res.json({ creditUsd: credit });
+    let balanceUsd: number | undefined;
+    if (privyUserId) {
+      balanceUsd =
+        credit > 0
+          ? creditUserBalanceUsd(privyUserId, credit)
+          : getUserBalanceUsd(privyUserId);
+    }
+
+    res.json({ creditUsd: credit, ...(balanceUsd !== undefined ? { balanceUsd } : {}) });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'claim failed' });
   }
@@ -117,6 +158,11 @@ router.post('/stars/claim', async (req, res) => {
 
 // Webhook: pre_checkout_query + successful_payment
 router.post('/stars/webhook', (req, res) => {
+  const secretHeader = req.headers['x-telegram-bot-api-secret-token'] as string | undefined;
+  if (!verifyWebhookSecret(secretHeader)) {
+    return res.status(401).json({ error: 'invalid webhook secret' });
+  }
+
   const update = req.body;
   console.log('Telegram webhook update type:', Object.keys(update || {}).join(','));
 
@@ -146,9 +192,9 @@ router.post('/stars/webhook', (req, res) => {
       }
 
       // 100 Stars = $1
-      const usd = stars / 100;
+      const usd = Number((stars / 100).toFixed(2));
       const ledger = loadCredits();
-      ledger[userId] = (ledger[userId] || 0) + usd;
+      ledger[userId] = Number(((ledger[userId] || 0) + usd).toFixed(2));
       saveCredits(ledger);
 
       charges.add(chargeId);

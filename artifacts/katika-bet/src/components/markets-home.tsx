@@ -16,6 +16,7 @@ import {
   SlidersHorizontal,
   X,
   Scale,
+  ShieldCheck,
 } from 'lucide-react';
 import { usePrivy } from '@privy-io/react-auth';
 import { useWallets, useSignAndSendTransaction } from '@privy-io/react-auth/solana';
@@ -33,9 +34,15 @@ import {
 import { SOLANA_TREASURY_PUBKEY, encodeBase58 } from '@/lib/mainnet-chains';
 import { SOLANA_RPC_URL, SOLANA_CLUSTER_NAME, SOLANA_CAIP_CHAIN } from '@/main';
 import { pushNotification } from '@/lib/notifications';
-import { getWalletBalance, setWalletBalance } from '@/lib/balance';
+import {
+  SOL_USD_RATE,
+  useUserWalletBalance,
+} from '@/lib/balance';
 import { useKyc } from '@/lib/kyc';
 import { useSearch } from 'wouter';
+import { AdminResolveModal } from '@/components/admin-resolve-modal';
+
+const QUICK_STAKE_CHIPS = [0.05, 0.1, 0.25, 0.5, 1] as const;
 
 export const MARKET_CATEGORIES = [
   'All',
@@ -66,15 +73,18 @@ export function MarketsHome({
   defaultCategory = 'All',
   variant = 'markets',
   sideRail,
+  openAdminOnMount = false,
 }: {
   defaultCategory?: string;
   variant?: 'markets' | 'discover';
   sideRail?: ReactNode;
+  openAdminOnMount?: boolean;
 }) {
-  const { authenticated, user, login } = usePrivy();
+  const { authenticated, user, login, getAccessToken } = usePrivy();
   const { recordGamePlay } = useKyc();
   const { wallets } = useWallets();
   const { signAndSendTransaction } = useSignAndSendTransaction();
+  const { balance, setBalance, refreshBalance } = useUserWalletBalance();
   const { toast } = useToast();
   const searchStr = useSearch();
 
@@ -102,9 +112,21 @@ export function MarketsHome({
   const [selectedMarket, setSelectedMarket] = useState<Market | null>(null);
   const [detailOrders, setDetailOrders] = useState<Position[]>([]);
   const [showCreate, setShowCreate] = useState(false);
+  const [showAdmin, setShowAdmin] = useState(openAdminOnMount);
   const [pendingBet, setPendingBet] = useState<{ market: Market; side: 'YES' | 'NO' } | null>(null);
-  const [betAmount, setBetAmount] = useState(0.1);
+  const [betAmountInput, setBetAmountInput] = useState('0.1');
   const [placing, setPlacing] = useState(false);
+
+  const parsedBetAmount = useMemo(() => {
+    const num = Number(betAmountInput);
+    return Number.isFinite(num) && num > 0 ? num : 0;
+  }, [betAmountInput]);
+
+  useEffect(() => {
+    if (openAdminOnMount) {
+      setShowAdmin(true);
+    }
+  }, [openAdminOnMount]);
 
   // Form creation
   const [newTitle, setNewTitle] = useState('');
@@ -161,7 +183,7 @@ export function MarketsHome({
     }
   };
 
-  // Open Bet Order Ticket
+  // Open Bet Order Ticket (never auto-submits; always lets user pick/edit stake amount)
   const openBet = (market: Market, side: 'YES' | 'NO', e?: React.MouseEvent) => {
     e?.stopPropagation();
     if (market.status === 'resolved') {
@@ -176,15 +198,15 @@ export function MarketsHome({
       return;
     }
     setPendingBet({ market, side });
-    setBetAmount(0.1);
+    setBetAmountInput('0.1');
   };
 
   // Execute Real Onchain Stake + Backend Position Persistence
   const confirmBet = async () => {
-    if (!pendingBet || betAmount <= 0) return;
+    if (!pendingBet || parsedBetAmount <= 0) return;
     setPlacing(true);
     const { market, side } = pendingBet;
-    const amount = betAmount;
+    const amount = parsedBetAmount;
     let txSig: string | undefined;
 
     try {
@@ -222,26 +244,33 @@ export function MarketsHome({
         }
       }
 
-      // 2. Calculate odds
+      // 2. Calculate estimated odds (server recalculates authoritatively)
       const oddsObj = calcOdds(market.yesShares, market.noShares);
       const decimalOdds = side === 'YES' ? parseFloat(oddsObj.yes) : parseFloat(oddsObj.no);
 
-      // 3. Persist stake to backend
+      // 3. Persist stake to backend with Privy access token
       const walletAddr = user?.wallet?.address || solWallet?.address;
-      const res = await placeStake({
-        marketId: market.id,
-        side,
-        amount,
-        odds: decimalOdds,
-        userId: user?.id,
-        walletAddress: walletAddr,
-        txSig,
-      });
+      const accessToken = await getAccessToken().catch(() => null);
+      const res = await placeStake(
+        {
+          marketId: market.id,
+          side,
+          amount,
+          odds: decimalOdds,
+          userId: user?.id,
+          walletAddress: walletAddr,
+          txSig,
+        },
+        accessToken
+      );
 
-      // 4. Deduct stake from user cash balance
-      const currentBal = getWalletBalance(user?.id);
-      const stakeUsd = amount * 148.5; // ~148.50 per SOL
-      setWalletBalance(user?.id, Math.max(0, currentBal - stakeUsd));
+      // 4. Sync balance from server response (or deduct locally as fallback)
+      const stakeUsd = amount * SOL_USD_RATE;
+      if (typeof res.balanceUsd === 'number') {
+        setBalance(res.balanceUsd, true);
+      } else {
+        setBalance(Math.max(0, balance - stakeUsd));
+      }
 
       // 5. Update UI
       setMarkets((prev) => prev.map((m) => (m.id === market.id ? res.market : m)));
@@ -396,6 +425,15 @@ export function MarketsHome({
               <Plus size={14} />
               <span>Create Market</span>
             </button>
+            <button
+              type="button"
+              onClick={() => setShowAdmin(true)}
+              className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-[#121820] hover:bg-[#18212b] px-3.5 py-2.5 text-xs font-semibold text-slate-300 hover:text-white transition-all whitespace-nowrap shrink-0"
+              title="Admin Market Settlement"
+            >
+              <ShieldCheck size={14} className="text-[#4ade80]" />
+              <span>Settle</span>
+            </button>
           </div>
         </div>
       ) : (
@@ -420,7 +458,7 @@ export function MarketsHome({
               Trade decentralized contracts across global politics, Nigerian politics, crypto, sports, finance, and lifestyle trends.
             </p>
 
-            <div className="mt-5 flex items-center gap-3">
+            <div className="mt-5 flex flex-wrap items-center gap-3">
               <button
                 onClick={() => {
                   if (!authenticated) {
@@ -433,6 +471,14 @@ export function MarketsHome({
               >
                 <Plus size={14} />
                 <span>Create Market</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowAdmin(true)}
+                className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-[#121820] hover:bg-[#18212b] px-4 py-2.5 text-xs font-semibold text-slate-300 hover:text-white transition-all"
+              >
+                <ShieldCheck size={14} className="text-[#4ade80]" />
+                <span>Admin Settle</span>
               </button>
             </div>
           </div>
@@ -772,92 +818,164 @@ export function MarketsHome({
       )}
 
       {/* PLACE REAL SOL STAKE MODAL */}
-      {pendingBet && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4 animate-in fade-in">
-          <div className="w-full max-w-md rounded-3xl border border-white/[0.1] bg-[#0D1217] p-6 shadow-2xl space-y-4">
-            <div className="flex items-start justify-between">
-              <div>
-                <h3 className="text-lg font-bold font-display text-white">
-                  Place <span className={pendingBet.side === 'YES' ? 'text-[#4ade80]' : 'text-[#f472b6]'}>{pendingBet.side}</span> Order
-                </h3>
-                <p className="mt-1 text-xs text-slate-400 line-clamp-2">{pendingBet.market.title}</p>
-              </div>
-              <button
-                onClick={() => setPendingBet(null)}
-                className="grid h-7 w-7 place-items-center rounded-full border border-white/10 text-slate-400"
-              >
-                <X size={14} />
-              </button>
-            </div>
+      {pendingBet && (() => {
+        const oddsObj = calcOdds(pendingBet.market.yesShares, pendingBet.market.noShares);
+        const activeOdds = parseFloat(pendingBet.side === 'YES' ? oddsObj.yes : oddsObj.no);
+        const stakeUsd = parsedBetAmount * SOL_USD_RATE;
+        const payoutSol = parsedBetAmount * activeOdds;
+        const payoutUsd = payoutSol * SOL_USD_RATE;
 
-            <div className="rounded-2xl bg-[#080C0F] p-4 border border-white/5 space-y-3">
-              <div className="flex justify-between items-center text-xs">
-                <span className="font-semibold text-slate-300">Wager Stake</span>
-                <span className="text-[10px] font-mono text-[#4ADE80]">Target: Vault Escrow</span>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <input
-                  type="number"
-                  step="0.1"
-                  min="0.01"
-                  value={betAmount}
-                  onChange={(e) => setBetAmount(parseFloat(e.target.value) || 0)}
-                  className="w-full rounded-xl border border-white/10 bg-[#121820] px-3.5 py-2.5 font-mono text-xl font-bold text-white focus:border-[#4ade80] focus:outline-none"
-                  autoFocus
-                />
-                <span className="font-mono text-xs font-bold text-[#4ADE80] uppercase bg-[#22c55e]/15 px-2.5 py-2.5 rounded-xl border border-[#22c55e]/30">
-                  SOL
-                </span>
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4 animate-in fade-in">
+            <div className="w-full max-w-md rounded-3xl border border-white/[0.1] bg-[#0D1217] p-6 shadow-2xl space-y-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-lg font-bold font-display text-white">
+                    Place{' '}
+                    <span className={pendingBet.side === 'YES' ? 'text-[#4ade80]' : 'text-[#f472b6]'}>
+                      {pendingBet.side}
+                    </span>{' '}
+                    Order
+                  </h3>
+                  <p className="mt-1 text-xs text-slate-400 line-clamp-2">{pendingBet.market.title}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setPendingBet(null)}
+                  className="grid h-7 w-7 shrink-0 place-items-center rounded-full border border-white/10 text-slate-400 hover:text-white"
+                >
+                  <X size={14} />
+                </button>
               </div>
 
-              <div className="flex items-center gap-1.5 pt-1">
-                {[0.1, 0.5, 1, 2].map((v) => (
-                  <button
-                    key={v}
-                    type="button"
-                    onClick={() => setBetAmount(v)}
-                    className="flex-1 rounded-lg bg-[#121820] border border-white/10 py-1 text-[11px] font-mono font-bold text-slate-300 hover:text-white"
-                  >
-                    {v} SOL
-                  </button>
-                ))}
+              {/* Outcome side switcher */}
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPendingBet({ ...pendingBet, side: 'YES' })}
+                  className={`rounded-xl border py-2 text-xs font-mono font-bold transition-all ${
+                    pendingBet.side === 'YES'
+                      ? 'border-[#22c55e] bg-[#22c55e]/20 text-[#4ade80]'
+                      : 'border-white/10 bg-[#080C0F] text-slate-400 hover:text-white'
+                  }`}
+                >
+                  YES · {oddsObj.yes}x
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPendingBet({ ...pendingBet, side: 'NO' })}
+                  className={`rounded-xl border py-2 text-xs font-mono font-bold transition-all ${
+                    pendingBet.side === 'NO'
+                      ? 'border-[#ec4899] bg-[#ec4899]/20 text-[#f472b6]'
+                      : 'border-white/10 bg-[#080C0F] text-slate-400 hover:text-white'
+                  }`}
+                >
+                  NO · {oddsObj.no}x
+                </button>
               </div>
 
-              <div className="flex items-center justify-between text-xs text-slate-400 pt-2 border-t border-white/5 font-mono">
-                <span>Potential Payout:</span>
-                <span className="font-bold text-[#4ade80]">
-                  {(betAmount * parseFloat(pendingBet.side === 'YES' ? calcOdds(pendingBet.market.yesShares, pendingBet.market.noShares).yes : calcOdds(pendingBet.market.yesShares, pendingBet.market.noShares).no)).toFixed(2)} SOL
-                </span>
-              </div>
-            </div>
+              <div className="rounded-2xl bg-[#080C0F] p-4 border border-white/[0.08] space-y-3">
+                <div className="flex justify-between items-center text-xs">
+                  <label htmlFor="sidebet-stake-input" className="font-semibold text-slate-200">
+                    Stake Amount (SOL)
+                  </label>
+                  <span className="text-[11px] font-mono text-slate-400 tabular-nums">
+                    Balance: <strong className="text-white">${balance.toFixed(2)}</strong>
+                  </span>
+                </div>
 
-            <div className="flex gap-3">
-              <button
-                onClick={() => setPendingBet(null)}
-                disabled={placing}
-                className="flex-1 rounded-xl border border-white/10 py-2.5 text-xs font-semibold text-slate-300 hover:bg-white/5"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={confirmBet}
-                disabled={placing || betAmount <= 0}
-                className="flex-1 rounded-xl bg-[#22c55e] hover:bg-[#16a34a] py-2.5 text-xs font-bold text-black disabled:opacity-50 shadow-md shadow-[#22c55e]/25 flex items-center justify-center gap-2"
-              >
-                {placing ? (
-                  <>
-                    <Loader2 size={14} className="animate-spin" />
-                    <span>Signing Onchain...</span>
-                  </>
-                ) : (
-                  `Stake ${betAmount} SOL`
-                )}
-              </button>
+                <div className="relative flex items-center gap-2">
+                  <div className="relative flex-1">
+                    <input
+                      id="sidebet-stake-input"
+                      type="text"
+                      inputMode="decimal"
+                      value={betAmountInput}
+                      onChange={(e) => {
+                        const raw = e.target.value.replace(',', '.');
+                        if (/^\d*\.?\d{0,4}$/.test(raw)) {
+                          setBetAmountInput(raw);
+                        }
+                      }}
+                      placeholder="0.10"
+                      className="w-full rounded-xl border border-emerald-500/35 bg-[#121820] pl-3.5 pr-24 py-3 font-mono text-xl font-bold text-white focus:border-[#4ade80] focus:outline-none"
+                      autoFocus
+                    />
+                    <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 font-mono text-xs font-semibold text-slate-400 tabular-nums">
+                      ≈ ${stakeUsd.toFixed(2)}
+                    </span>
+                  </div>
+                  <span className="font-mono text-xs font-bold text-[#4ADE80] uppercase bg-[#22c55e]/15 px-3 py-3.5 rounded-xl border border-[#22c55e]/30 shrink-0">
+                    SOL
+                  </span>
+                </div>
+
+                {/* Quick Stake Chips: 0.05 / 0.1 / 0.25 / 0.5 / 1 SOL */}
+                <div className="grid grid-cols-5 gap-1.5 pt-0.5">
+                  {QUICK_STAKE_CHIPS.map((v) => {
+                    const isSelected = Math.abs(parsedBetAmount - v) < 0.0001;
+                    return (
+                      <button
+                        key={v}
+                        type="button"
+                        onClick={() => setBetAmountInput(String(v))}
+                        className={`rounded-lg border py-1.5 text-[11px] font-mono font-bold transition-all tabular-nums ${
+                          isSelected
+                            ? 'border-[#4ade80] bg-[#22c55e]/20 text-[#4ade80]'
+                            : 'border-white/10 bg-[#121820] text-slate-300 hover:border-white/25 hover:text-white'
+                        }`}
+                      >
+                        {v}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="space-y-1.5 pt-2 border-t border-white/5 text-xs font-mono">
+                  <div className="flex items-center justify-between text-slate-400">
+                    <span>Estimated Cost:</span>
+                    <span className="text-slate-200 tabular-nums">
+                      {parsedBetAmount.toFixed(2)} SOL · ≈ ${stakeUsd.toFixed(2)}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between text-slate-400">
+                    <span>Potential Payout ({activeOdds.toFixed(2)}×):</span>
+                    <span className="font-bold text-[#4ade80] tabular-nums">
+                      {payoutSol.toFixed(2)} SOL · ≈ ${payoutUsd.toFixed(2)}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setPendingBet(null)}
+                  disabled={placing}
+                  className="flex-1 rounded-xl border border-white/10 py-2.5 text-xs font-semibold text-slate-300 hover:bg-white/5"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmBet}
+                  disabled={placing || parsedBetAmount <= 0}
+                  className="flex-1 rounded-xl bg-[#22c55e] hover:bg-[#16a34a] py-2.5 text-xs font-bold text-black disabled:opacity-50 shadow-md shadow-[#22c55e]/25 flex items-center justify-center gap-2"
+                >
+                  {placing ? (
+                    <>
+                      <Loader2 size={14} className="animate-spin" />
+                      <span>Placing Stake...</span>
+                    </>
+                  ) : (
+                    `Stake ${parsedBetAmount > 0 ? parsedBetAmount : 0} SOL (≈$${stakeUsd.toFixed(2)})`
+                  )}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* CREATE MARKET MODAL */}
       {showCreate && (
@@ -927,6 +1045,15 @@ export function MarketsHome({
           </div>
         </div>
       )}
+
+      <AdminResolveModal
+        isOpen={showAdmin}
+        onClose={() => setShowAdmin(false)}
+        onResolved={() => {
+          void loadMarkets();
+          void refreshBalance();
+        }}
+      />
     </div>
   );
 }

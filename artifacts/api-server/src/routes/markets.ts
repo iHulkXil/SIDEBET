@@ -1,6 +1,20 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import fs from "fs";
 import path from "path";
+import { AuthConfigError, AuthError, authenticateRequest } from "../lib/privy-auth";
+import {
+  creditUserBalanceUsd,
+  debitUserBalanceUsd,
+  getUserBalanceUsd,
+  SOL_USD_RATE,
+} from "../lib/balance-ledger";
+import {
+  bootstrapAdminPasscode,
+  getAdminAuthStatus,
+  issueAdminSessionToken,
+  verifyAdminPasscode,
+  verifyAdminRequest,
+} from "../lib/admin-auth";
 
 const router: IRouter = Router();
 
@@ -33,6 +47,8 @@ export type Position = {
   odds: number;
   status: "open" | "won" | "lost" | "claimed";
   payout: number;
+  payoutUsd?: number;
+  creditedAt?: string;
   txSig?: string;
   placedAt: string;
 };
@@ -68,6 +84,23 @@ const INITIAL_MARKETS: Market[] = [
     liquidity: 0,
     volume: 0,
     endsAt: "Dec 31",
+    status: "open",
+    resolution: null,
+    creator: "Sidebet Desk",
+    icon: "politics",
+    createdAt: new Date().toISOString(),
+    resolvedAt: null,
+  },
+  {
+    id: "tinubu-naira-1450",
+    title: "Will the official USD/NGN NAFEM rate strengthen below ₦1,450 before Q4 close?",
+    description: "Resolves YES if the Central Bank of Nigeria / FMDQ official closing USD/NGN rate prints below 1,450.00 Naira on any trading day before Q4 close.",
+    category: "Nigerian Politics",
+    yesShares: 5000,
+    noShares: 5000,
+    liquidity: 0,
+    volume: 0,
+    endsAt: "Q4",
     status: "open",
     resolution: null,
     creator: "Sidebet Desk",
@@ -167,6 +200,40 @@ const INITIAL_MARKETS: Market[] = [
     id: "arsenal",
     title: "Will Arsenal win the Premier League 2026/27 title race?",
     description: "Resolves YES if Arsenal Football Club is officially crowned Premier League Champions by the FA.",
+    category: "Sports",
+    yesShares: 5000,
+    noShares: 5000,
+    liquidity: 0,
+    volume: 0,
+    endsAt: "May 2027",
+    status: "open",
+    resolution: null,
+    creator: "SportsDesk",
+    icon: "arsenal",
+    createdAt: new Date().toISOString(),
+    resolvedAt: null,
+  },
+  {
+    id: "super-eagles-wcq",
+    title: "Will Nigeria's Super Eagles qualify directly for the 2026 FIFA World Cup?",
+    description: "Resolves YES if Nigeria finishes top of their CAF qualifying group or secures direct qualification without playoff elimination.",
+    category: "Sports",
+    yesShares: 5000,
+    noShares: 5000,
+    liquidity: 0,
+    volume: 0,
+    endsAt: "WCQ",
+    status: "open",
+    resolution: null,
+    creator: "SportsDesk",
+    icon: "arsenal",
+    createdAt: new Date().toISOString(),
+    resolvedAt: null,
+  },
+  {
+    id: "ucl-english-winner",
+    title: "Will an English Premier League club win the 2026/27 UEFA Champions League?",
+    description: "Resolves YES if any Premier League team lifts the 2026/27 UEFA Champions League trophy.",
     category: "Sports",
     yesShares: 5000,
     noShares: 5000,
@@ -489,9 +556,46 @@ router.post("/markets", (req: Request, res: Response) => {
   });
 });
 
-// 4. POST /api/markets/:id/resolve (Admin or Authorized Resolver)
+/* ==========================================================================
+   ADMIN AUTHENTICATION ROUTES (FOR MARKET SETTLEMENT)
+   ========================================================================== */
+
+router.get("/admin/status", (_req: Request, res: Response) => {
+  return res.json({
+    success: true,
+    ...getAdminAuthStatus(),
+  });
+});
+
+router.post("/admin/bootstrap", (req: Request, res: Response) => {
+  const { passcode } = req.body ?? {};
+  if (typeof passcode !== "string") {
+    return res.status(400).json({ error: "Passcode is required" });
+  }
+  const result = bootstrapAdminPasscode(passcode);
+  if (!result.ok) {
+    return res.status(400).json({ error: result.error });
+  }
+  const token = issueAdminSessionToken();
+  return res.status(201).json({ success: true, token });
+});
+
+router.post("/admin/login", (req: Request, res: Response) => {
+  const { passcode } = req.body ?? {};
+  if (typeof passcode !== "string" || !verifyAdminPasscode(passcode)) {
+    return res.status(401).json({ error: "Invalid admin passcode" });
+  }
+  const token = issueAdminSessionToken();
+  return res.json({ success: true, token });
+});
+
+// 4. POST /api/markets/:id/resolve (Server-verified Admin Resolver + Auto Winner Payout)
 router.post("/markets/:id/resolve", (req: Request, res: Response) => {
-  const { resolution } = req.body; // "YES" | "NO"
+  if (!verifyAdminRequest(req)) {
+    return res.status(401).json({ error: "Admin authentication required to resolve markets" });
+  }
+
+  const { resolution } = req.body ?? {}; // "YES" | "NO"
   const market = marketsMap.get(String(req.params.id));
 
   if (!market) {
@@ -512,21 +616,35 @@ router.post("/markets/:id/resolve", (req: Request, res: Response) => {
   market.resolvedAt = new Date().toISOString();
   persistMarkets();
 
-  // Settle all related user positions
+  // Settle all related open positions and automatically credit winners' server USD balances
   let updatedCount = 0;
   let wonCount = 0;
   let lostCount = 0;
+  let totalCreditedUsd = 0;
+  const nowIso = new Date().toISOString();
 
   positionsList.forEach((pos) => {
     if (pos.marketId === market.id && pos.status === "open") {
       updatedCount++;
       if (pos.side === resolution) {
-        pos.status = "won";
-        pos.payout = pos.amount * pos.odds;
+        const payoutSol = Number((pos.amount * pos.odds).toFixed(6));
+        const payoutUsd = Number((payoutSol * SOL_USD_RATE).toFixed(2));
+        pos.payout = payoutSol;
+        pos.payoutUsd = payoutUsd;
         wonCount++;
+
+        if (pos.userId && pos.userId !== "guest-user") {
+          creditUserBalanceUsd(pos.userId, payoutUsd);
+          pos.status = "claimed";
+          pos.creditedAt = nowIso;
+          totalCreditedUsd = Number((totalCreditedUsd + payoutUsd).toFixed(2));
+        } else {
+          pos.status = "won";
+        }
       } else {
         pos.status = "lost";
         pos.payout = 0;
+        pos.payoutUsd = 0;
         lostCount++;
       }
     }
@@ -536,12 +654,13 @@ router.post("/markets/:id/resolve", (req: Request, res: Response) => {
 
   return res.json({
     success: true,
-    message: `Market resolved to ${resolution}. ${updatedCount} positions settled.`,
+    message: `Market resolved to ${resolution}. ${updatedCount} positions settled ($${totalCreditedUsd.toFixed(2)} credited).`,
     market,
     stats: {
       settledPositions: updatedCount,
       wonPositions: wonCount,
       lostPositions: lostCount,
+      totalCreditedUsd,
     },
   });
 });
@@ -555,11 +674,17 @@ router.get("/positions", (req: Request, res: Response) => {
   const { userId, walletAddress, marketId } = req.query;
   let list = [...positionsList];
 
-  if (walletAddress) {
-    const addr = String(walletAddress).toLowerCase();
+  const addr = walletAddress ? String(walletAddress).toLowerCase() : "";
+  const uid = userId ? String(userId) : "";
+
+  if (addr && uid) {
+    list = list.filter(
+      (p) => p.walletAddress?.toLowerCase() === addr || p.userId === uid,
+    );
+  } else if (addr) {
     list = list.filter((p) => p.walletAddress?.toLowerCase() === addr);
-  } else if (userId) {
-    list = list.filter((p) => p.userId === String(userId));
+  } else if (uid) {
+    list = list.filter((p) => p.userId === uid);
   }
 
   if (marketId) {
@@ -574,14 +699,18 @@ router.get("/positions", (req: Request, res: Response) => {
 });
 
 // 6. POST /api/positions (Stake on a market)
-router.post("/positions", (req: Request, res: Response) => {
-  const { marketId, side, amount, odds, userId, walletAddress, txSig } = req.body;
+router.post("/positions", async (req: Request, res: Response) => {
+  const { marketId, side, amount, userId, walletAddress, txSig } = req.body ?? {};
 
   if (!marketId || !side || !amount) {
     return res.status(400).json({ error: "marketId, side, and amount are required" });
   }
 
-  const market = marketsMap.get(marketId);
+  if (side !== "YES" && side !== "NO") {
+    return res.status(400).json({ error: "side must be 'YES' or 'NO'" });
+  }
+
+  const market = marketsMap.get(String(marketId));
   if (!market) {
     return res.status(404).json({ error: "Market not found" });
   }
@@ -591,8 +720,41 @@ router.post("/positions", (req: Request, res: Response) => {
   }
 
   const stakeAmount = Number(amount);
-  if (isNaN(stakeAmount) || stakeAmount <= 0) {
+  if (!Number.isFinite(stakeAmount) || stakeAmount <= 0 || stakeAmount > 1000) {
     return res.status(400).json({ error: "Invalid stake amount" });
+  }
+
+  // Prefer server-verified Privy identity when Authorization header is provided
+  let resolvedUserId = typeof userId === "string" && userId.trim() ? userId.trim() : "guest-user";
+  let authenticatedPrivyUserId: string | null = null;
+  if (typeof req.headers.authorization === "string" && req.headers.authorization.startsWith("Bearer ")) {
+    try {
+      const identity = await authenticateRequest(req);
+      authenticatedPrivyUserId = identity.privyUserId;
+      resolvedUserId = identity.privyUserId;
+    } catch {
+      // Allow graceful fallback if Privy config isn't active in local dev
+    }
+  }
+
+  // Compute server-side odds from current AMM shares BEFORE applying this stake
+  const totalShares = (market.yesShares || 0) + (market.noShares || 0) || 1;
+  const yesProb = Math.max(0.01, Math.min(0.99, market.yesShares / totalShares));
+  const serverOdds = Number((1 / (side === "YES" ? yesProb : 1 - yesProb)).toFixed(2));
+
+  // If staked from off-chain server USD balance (no Solana txSig), debit server ledger when available
+  let updatedBalanceUsd: number | undefined;
+  if (!txSig && authenticatedPrivyUserId) {
+    const stakeUsd = Number((stakeAmount * SOL_USD_RATE).toFixed(2));
+    const currentServerBal = getUserBalanceUsd(authenticatedPrivyUserId);
+    if (currentServerBal >= stakeUsd) {
+      const debit = debitUserBalanceUsd(authenticatedPrivyUserId, stakeUsd);
+      updatedBalanceUsd = debit.balanceUsd;
+    } else {
+      updatedBalanceUsd = currentServerBal;
+    }
+  } else if (authenticatedPrivyUserId) {
+    updatedBalanceUsd = getUserBalanceUsd(authenticatedPrivyUserId);
   }
 
   // Update market AMM shares & volume
@@ -602,23 +764,23 @@ router.post("/positions", (req: Request, res: Response) => {
   } else {
     market.noShares += shareDelta;
   }
-  market.volume += stakeAmount;
-  market.liquidity += stakeAmount * 0.5;
+  market.volume = Number((market.volume + stakeAmount).toFixed(6));
+  market.liquidity = Number((market.liquidity + stakeAmount * 0.5).toFixed(6));
   persistMarkets();
 
   // Create new position
   const position: Position = {
     id: `pos-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-    userId: userId || "guest-user",
-    walletAddress: walletAddress || undefined,
+    userId: resolvedUserId,
+    walletAddress: typeof walletAddress === "string" && walletAddress.trim() ? walletAddress.trim() : undefined,
     marketId: market.id,
     title: market.title,
-    side: side === "YES" ? "YES" : "NO",
+    side,
     amount: stakeAmount,
-    odds: Number(odds) || 1.85,
+    odds: serverOdds,
     status: "open",
     payout: 0,
-    txSig: txSig || undefined,
+    txSig: typeof txSig === "string" && txSig.trim() ? txSig.trim() : undefined,
     placedAt: new Date().toISOString(),
   };
 
@@ -629,28 +791,50 @@ router.post("/positions", (req: Request, res: Response) => {
     success: true,
     position,
     market,
+    ...(updatedBalanceUsd !== undefined ? { balanceUsd: updatedBalanceUsd } : {}),
   });
 });
 
-// 7. POST /api/positions/:id/claim
-router.post("/positions/:id/claim", (req: Request, res: Response) => {
-  const pos = positionsList.find((p) => p.id === req.params.id);
-  if (!pos) {
-    return res.status(404).json({ error: "Position not found" });
+// 7. POST /api/positions/:id/claim (Fallback manual claim for uncredited 'won' positions)
+router.post("/positions/:id/claim", async (req: Request, res: Response) => {
+  try {
+    const identity = await authenticateRequest(req);
+    const pos = positionsList.find((p) => p.id === req.params.id);
+    if (!pos) {
+      return res.status(404).json({ error: "Position not found" });
+    }
+
+    if (pos.userId && pos.userId !== "guest-user" && pos.userId !== identity.privyUserId) {
+      return res.status(403).json({ error: "You do not own this position" });
+    }
+
+    if (pos.status !== "won") {
+      return res.status(400).json({ error: "Position is not in a claimable winning state" });
+    }
+
+    const payoutUsd = Number((pos.payoutUsd ?? pos.payout * SOL_USD_RATE).toFixed(2));
+    const balanceUsd = creditUserBalanceUsd(identity.privyUserId, payoutUsd);
+    pos.status = "claimed";
+    pos.payoutUsd = payoutUsd;
+    pos.creditedAt = new Date().toISOString();
+    persistPositions();
+
+    return res.json({
+      success: true,
+      claimedAmount: pos.payout,
+      claimedUsd: payoutUsd,
+      balanceUsd,
+      position: pos,
+    });
+  } catch (error) {
+    if (error instanceof AuthConfigError) {
+      return res.status(503).json({ error: error.message });
+    }
+    if (error instanceof AuthError) {
+      return res.status(401).json({ error: error.message });
+    }
+    return res.status(500).json({ error: "Failed to claim position" });
   }
-
-  if (pos.status !== "won") {
-    return res.status(400).json({ error: "Position is not in a winning state" });
-  }
-
-  pos.status = "claimed";
-  persistPositions();
-
-  return res.json({
-    success: true,
-    claimedAmount: pos.payout,
-    position: pos,
-  });
 });
 
 // 8. GET /api/stats/overview

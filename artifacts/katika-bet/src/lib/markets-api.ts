@@ -27,6 +27,8 @@ export type Position = {
   odds: number;
   status: 'open' | 'won' | 'lost' | 'claimed';
   payout: number;
+  payoutUsd?: number;
+  creditedAt?: string;
   txSig?: string;
   placedAt: string;
 };
@@ -40,6 +42,14 @@ export type PlatformStats = {
   totalPositions: number;
   activeTradersCount: number;
 };
+
+export type AdminAuthStatus = {
+  configured: boolean;
+  needsBootstrap: boolean;
+  envManaged: boolean;
+};
+
+const API_BASE = import.meta.env.VITE_API_BASE || '';
 
 // Calculate probability and decimal odds from AMM shares
 export function calcOdds(yes: number, no: number) {
@@ -58,7 +68,7 @@ export async function fetchMarkets(category?: string, search?: string): Promise<
     if (category && category !== 'All') params.append('category', category);
     if (search) params.append('search', search);
 
-    const res = await fetch(`/api/markets?${params.toString()}`);
+    const res = await fetch(`${API_BASE}/api/markets?${params.toString()}`);
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data.markets)) {
@@ -86,7 +96,7 @@ export async function fetchMarkets(category?: string, search?: string): Promise<
 
 export async function fetchMarketById(id: string): Promise<{ market: Market; recentOrders: Position[] } | null> {
   try {
-    const res = await fetch(`/api/markets/${id}`);
+    const res = await fetch(`${API_BASE}/api/markets/${encodeURIComponent(id)}`);
     if (res.ok) {
       const data = await res.json();
       return { market: data.market, recentOrders: data.recentOrders || [] };
@@ -104,14 +114,14 @@ export async function createMarket(input: {
   initialLiquidity?: number;
   creator?: string;
 }): Promise<Market> {
-  const res = await fetch('/api/markets', {
+  const res = await fetch(`${API_BASE}/api/markets`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(input),
   });
 
   if (!res.ok) {
-    const err = await res.json();
+    const err = await res.json().catch(() => ({}));
     throw new Error(err.error || 'Failed to create market');
   }
 
@@ -119,27 +129,83 @@ export async function createMarket(input: {
   return data.market;
 }
 
-export async function resolveMarket(marketId: string, resolution: 'YES' | 'NO'): Promise<{ market: Market; stats: any }> {
-  const res = await fetch(`/api/markets/${marketId}/resolve`, {
+export async function fetchAdminStatus(): Promise<AdminAuthStatus> {
+  const res = await fetch(`${API_BASE}/api/admin/status`);
+  if (!res.ok) {
+    throw new Error('Could not check admin status');
+  }
+  const data = await res.json();
+  return {
+    configured: Boolean(data.configured),
+    needsBootstrap: Boolean(data.needsBootstrap),
+    envManaged: Boolean(data.envManaged),
+  };
+}
+
+export async function bootstrapAdmin(passcode: string): Promise<string> {
+  const res = await fetch(`${API_BASE}/api/admin/bootstrap`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ passcode }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.token) {
+    throw new Error(data.error || 'Failed to set admin passcode');
+  }
+  return data.token;
+}
+
+export async function loginAdmin(passcode: string): Promise<string> {
+  const res = await fetch(`${API_BASE}/api/admin/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ passcode }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.token) {
+    throw new Error(data.error || 'Invalid admin passcode');
+  }
+  return data.token;
+}
+
+export async function resolveMarket(
+  marketId: string,
+  resolution: 'YES' | 'NO',
+  adminToken: string
+): Promise<{
+  market: Market;
+  message?: string;
+  stats: {
+    settledPositions: number;
+    wonPositions: number;
+    lostPositions: number;
+    totalCreditedUsd?: number;
+  };
+}> {
+  const res = await fetch(`${API_BASE}/api/markets/${encodeURIComponent(marketId)}/resolve`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-admin-token': adminToken,
+    },
     body: JSON.stringify({ resolution }),
   });
 
   if (!res.ok) {
-    const err = await res.json();
+    const err = await res.json().catch(() => ({}));
     throw new Error(err.error || 'Failed to resolve market');
   }
 
   return await res.json();
 }
 
-export async function fetchPositions(walletAddress?: string): Promise<Position[]> {
+export async function fetchPositions(walletAddress?: string, userId?: string): Promise<Position[]> {
   try {
     const params = new URLSearchParams();
     if (walletAddress) params.append('walletAddress', walletAddress);
+    if (userId) params.append('userId', userId);
 
-    const res = await fetch(`/api/positions?${params.toString()}`);
+    const res = await fetch(`${API_BASE}/api/positions?${params.toString()}`);
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data.positions)) {
@@ -159,23 +225,31 @@ export async function fetchPositions(walletAddress?: string): Promise<Position[]
   return [];
 }
 
-export async function placeStake(input: {
-  marketId: string;
-  side: 'YES' | 'NO';
-  amount: number;
-  odds: number;
-  userId?: string;
-  walletAddress?: string;
-  txSig?: string;
-}): Promise<{ position: Position; market: Market }> {
-  const res = await fetch('/api/positions', {
+export async function placeStake(
+  input: {
+    marketId: string;
+    side: 'YES' | 'NO';
+    amount: number;
+    odds: number;
+    userId?: string;
+    walletAddress?: string;
+    txSig?: string;
+  },
+  accessToken?: string | null
+): Promise<{ position: Position; market: Market; balanceUsd?: number }> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (accessToken) {
+    headers.Authorization = `Bearer ${accessToken}`;
+  }
+
+  const res = await fetch(`${API_BASE}/api/positions`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify(input),
   });
 
   if (!res.ok) {
-    const err = await res.json();
+    const err = await res.json().catch(() => ({}));
     throw new Error(err.error || 'Failed to place stake');
   }
 
@@ -192,23 +266,36 @@ export async function placeStake(input: {
   return data;
 }
 
-export async function claimWinnings(positionId: string): Promise<number> {
-  const res = await fetch(`/api/positions/${positionId}/claim`, {
+export async function claimWinnings(
+  positionId: string,
+  accessToken?: string | null
+): Promise<{ claimedAmount: number; claimedUsd?: number; balanceUsd?: number }> {
+  const headers: Record<string, string> = {};
+  if (accessToken) {
+    headers.Authorization = `Bearer ${accessToken}`;
+  }
+
+  const res = await fetch(`${API_BASE}/api/positions/${encodeURIComponent(positionId)}/claim`, {
     method: 'POST',
+    headers,
   });
 
   if (!res.ok) {
-    const err = await res.json();
+    const err = await res.json().catch(() => ({}));
     throw new Error(err.error || 'Failed to claim position');
   }
 
   const data = await res.json();
-  return data.claimedAmount;
+  return {
+    claimedAmount: data.claimedAmount,
+    claimedUsd: data.claimedUsd,
+    balanceUsd: data.balanceUsd,
+  };
 }
 
 export async function fetchStats(): Promise<PlatformStats> {
   try {
-    const res = await fetch('/api/stats/overview');
+    const res = await fetch(`${API_BASE}/api/stats/overview`);
     if (res.ok) {
       const data = await res.json();
       return data.stats;

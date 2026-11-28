@@ -16,9 +16,12 @@ import { PotWheelGamePage } from '@/components/pot-wheel-game';
 import { PenaltyShootoutPage } from '@/components/penalty-shootout';
 import { GlobalChatPage } from '@/components/global-chat';
 import { KycOnboardingModal } from '@/components/kyc-onboarding-modal';
+import { AgeJurisdictionNotice } from '@/components/age-jurisdiction-notice';
 import { KycProvider, useKyc } from '@/lib/kyc';
 import { Link, Route, Switch, Router as WouterRouter, useLocation } from 'wouter';
 import { initTelegramWebApp, getStartParam } from '@/lib/telegram';
+
+const PENDING_DEEP_LINK_KEY = 'sidebet_pending_market_open';
 
 const queryClient = new QueryClient();
 
@@ -62,10 +65,27 @@ function Router() {
     if (start && start.startsWith('market_')) {
       const marketId = start.slice('market_'.length);
       if (marketId) {
-        setLocation(`/markets?open=${encodeURIComponent(marketId)}`);
+        try {
+          sessionStorage.setItem(PENDING_DEEP_LINK_KEY, marketId);
+        } catch {}
+        if (unlocked) {
+          setLocation(`/markets?open=${encodeURIComponent(marketId)}`);
+        }
       }
     }
-  }, [setLocation]);
+  }, [setLocation, unlocked]);
+
+  useEffect(() => {
+    if (unlocked) {
+      try {
+        const pendingId = sessionStorage.getItem(PENDING_DEEP_LINK_KEY);
+        if (pendingId) {
+          sessionStorage.removeItem(PENDING_DEEP_LINK_KEY);
+          setLocation(`/markets?open=${encodeURIComponent(pendingId)}`);
+        }
+      } catch {}
+    }
+  }, [unlocked, setLocation]);
 
   useEffect(() => {
     if (ready && !kycLoading && !unlocked && location !== '/') {
@@ -112,6 +132,7 @@ function Router() {
         <Route path="/chat" component={GlobalChat} />
         <Route path="/leaderboard" component={GlobalChat} />
         <Route path="/profile" component={ProfilePage} />
+        <Route path="/admin">{() => <MarketsHome openAdminOnMount />}</Route>
         <Route component={NotFoundPage} />
       </Switch>
     </ErrorRouted>
@@ -133,6 +154,7 @@ function App() {
               <Router />
             </LayoutShell>
             <KycOnboardingModal />
+            <AgeJurisdictionNotice />
           </WouterRouter>
           <Toaster />
         </KycProvider>

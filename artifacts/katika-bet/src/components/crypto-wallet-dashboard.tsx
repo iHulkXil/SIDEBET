@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'wouter';
 import { usePrivy, useWallets as useEvmWallets } from '@privy-io/react-auth';
 import { useWallets } from '@privy-io/react-auth/solana';
@@ -9,17 +9,23 @@ import { MyBets } from '@/components/my-bets';
 import { fetchPositions, type Position } from '@/lib/markets-api';
 import { useUserAvatar } from '@/lib/avatar';
 import { useUserWalletBalance } from '@/lib/balance';
-import { getTelegramWebApp, openStarsInvoice, isTelegramWebApp, triggerHaptic } from '@/lib/telegram';
+import {
+  getTelegramWebApp,
+  openStarsInvoice,
+  isTelegramWebApp,
+  triggerHaptic,
+  triggerHapticNotification,
+} from '@/lib/telegram';
 import { useToast } from '@/hooks/use-toast';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
 
 export function CryptoWalletDashboard() {
-  const { authenticated, user } = usePrivy();
+  const { authenticated, user, getAccessToken } = usePrivy();
   const { wallets } = useWallets();
   const { wallets: evmWallets } = useEvmWallets();
   const { avatarUrl } = useUserAvatar();
-  const { balance, setBalance } = useUserWalletBalance();
+  const { balance, setBalance, refreshBalance } = useUserWalletBalance();
   const { toast } = useToast();
 
   const [modalOpen, setModalOpen] = useState(false);
@@ -33,20 +39,68 @@ export function CryptoWalletDashboard() {
   const walletAddress = activeSolAddr || activeEvmAddr || '';
   const inTelegram = isTelegramWebApp();
 
+  const claimPendingStars = useCallback(
+    async (silent = false): Promise<number> => {
+      const tg = getTelegramWebApp();
+      if (!tg?.initData) return 0;
+
+      const headers: Record<string, string> = {
+        'x-telegram-init-data': tg.initData,
+      };
+      if (authenticated) {
+        const token = await getAccessToken().catch(() => null);
+        if (token) {
+          headers.Authorization = `Bearer ${token}`;
+        }
+      }
+
+      const claim = await fetch(`${API_BASE}/api/telegram/stars/claim`, {
+        method: 'POST',
+        headers,
+      });
+      if (!claim.ok) return 0;
+
+      const payload = await claim.json();
+      const creditUsd = Number(payload?.creditUsd) || 0;
+      if (typeof payload?.balanceUsd === 'number') {
+        setBalance(payload.balanceUsd, true);
+      } else if (creditUsd > 0) {
+        setBalance(balance + creditUsd);
+      }
+
+      if (creditUsd > 0 && !silent) {
+        toast({
+          title: 'Credit added',
+          description: `+$${creditUsd.toFixed(2)} from Telegram Stars`,
+        });
+        triggerHapticNotification('success');
+      }
+      return creditUsd;
+    },
+    [authenticated, getAccessToken, balance, setBalance, toast]
+  );
+
   useEffect(() => {
     let mounted = true;
     const queryAddr = activeSolAddr || activeEvmAddr;
-    if (!authenticated || !queryAddr) {
+    if (!authenticated || (!queryAddr && !user?.id)) {
       setPositions([]);
       return;
     }
-    void fetchPositions(queryAddr).then((list) => {
+    void fetchPositions(queryAddr, user?.id).then((list) => {
       if (mounted) setPositions(list);
     });
     return () => {
       mounted = false;
     };
-  }, [authenticated, activeSolAddr, activeEvmAddr]);
+  }, [authenticated, activeSolAddr, activeEvmAddr, user?.id]);
+
+  // Sweep any pending Stars credits that arrived via webhook when opening Wallet in Telegram
+  useEffect(() => {
+    if (inTelegram && authenticated) {
+      void claimPendingStars(true);
+    }
+  }, [inTelegram, authenticated, claimPendingStars]);
 
   const openCount = positions.filter((p) => p.status === 'open').length;
   const totalStakedSOL = positions.reduce((acc, p) => acc + (p.amount || 0), 0);
@@ -85,18 +139,19 @@ export function CryptoWalletDashboard() {
 
       const status = await openStarsInvoice(data.invoiceUrl);
       if (status === 'paid') {
-        // Claim credit from server
-        const claim = await fetch(`${API_BASE}/api/telegram/stars/claim`, {
-          method: 'POST',
-          headers: { 'x-telegram-init-data': tg.initData },
-        });
-        if (claim.ok) {
-          const { creditUsd } = await claim.json();
-          if (creditUsd > 0) {
-            setBalance(balance + creditUsd);
-            toast({ title: 'Credit added', description: `+$${creditUsd.toFixed(2)} from Telegram Stars` });
-            triggerHaptic('success' as any);
-          }
+        // Retry claim up to 5 times in case Telegram webhook arrives slightly after client callback
+        let credited = 0;
+        for (let attempt = 0; attempt < 5; attempt++) {
+          credited = await claimPendingStars(false);
+          if (credited > 0) break;
+          await new Promise((r) => setTimeout(r, 1200));
+        }
+        if (credited === 0) {
+          await refreshBalance();
+          toast({
+            title: 'Payment received',
+            description: 'Your Stars credit is syncing—reopen Wallet in a moment if it does not appear immediately.',
+          });
         }
       } else if (status === 'cancelled') {
         toast({ title: 'Cancelled', description: 'Payment was cancelled.' });
